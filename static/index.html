@@ -8,56 +8,90 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <main class="shell">
-    <header>
-      <p class="eyebrow">Raspberry Pi · HDMI 5.1</p>
-      <h1>Enviar sonido</h1>
-      <p>Elige un archivo y pulsa el altavoz en el que quieres escucharlo.</p>
+  <main class="dashboard">
+    <header class="hero">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="hero-copy">
+        <p class="eyebrow">RPI AUDIO <span class="eyebrow-dot">·</span> CONTROL 5.1</p>
+        <h1>El sonido, en su lugar.</h1>
+        <p>Elige un archivo y envíalo al altavoz que quieras.</p>
+      </div>
+      <div class="output-badge"><span class="output-dot"></span> SALIDA HDMI <strong>48 kHz · 5.1</strong></div>
     </header>
 
     <div id="message" class="message" role="status" aria-live="polite"></div>
 
-    <section class="panel" aria-labelledby="library-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="library-title">Archivos de audio</h2>
-          <p>MP3, OGG o WAV · hasta 100 MB por archivo</p>
+    <div class="workspace">
+      <section class="panel library-panel" aria-labelledby="library-title">
+        <div class="section-heading">
+          <div class="heading-copy">
+            <span class="section-number">01 / BIBLIOTECA</span>
+            <h2 id="library-title">Tus sonidos</h2>
+            <p>Selecciona el archivo que quieres lanzar.</p>
+          </div>
         </div>
         <label class="upload-button">
-          Subir archivo
+          <span class="upload-plus" aria-hidden="true">+</span>
+          <span>Subir archivo <small>MP3, OGG o WAV · máx. 100 MB</small></span>
           <input id="upload" type="file" accept=".mp3,.ogg,.wav,audio/mpeg,audio/ogg,audio/wav">
         </label>
-      </div>
-      <div id="files" class="file-list" role="radiogroup" aria-label="Archivo seleccionado"></div>
-    </section>
+        <div class="list-heading"><span>ARCHIVOS</span><span id="file-count">0 archivos</span></div>
+        <div id="files" class="file-list" role="radiogroup" aria-label="Archivo seleccionado"></div>
+        <p class="library-tip">Puedes desplazar la lista para encontrar más sonidos.</p>
+      </section>
 
-    <section class="panel" aria-labelledby="speakers-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="speakers-title">Altavoces</h2>
-          <p>La web envía el archivo seleccionado en mono al altavoz que pulses.</p>
-        </div>
-      </div>
-      <div class="speaker-grid">
-        <button type="button" data-channel="front_left">Frontal izquierdo</button>
-        <button type="button" data-channel="center">Central</button>
-        <button type="button" data-channel="front_right">Frontal derecho</button>
-        <button type="button" data-channel="rear_left">Trasero izquierdo</button>
-        <button type="button" data-channel="lfe">Subwoofer · LFE</button>
-        <button type="button" data-channel="rear_right">Trasero derecho</button>
-      </div>
-    </section>
+      <div class="control-column">
+        <section class="panel speaker-panel" aria-labelledby="speakers-title">
+          <div class="section-heading">
+            <div class="heading-copy">
+              <span class="section-number">02 / SALIDA</span>
+              <h2 id="speakers-title">Elige un altavoz</h2>
+              <p>La disposición reproduce tu sala 5.1 vista desde arriba.</p>
+            </div>
+            <span class="layout-tag">5.1 SURROUND</span>
+          </div>
+          <div class="selection-strip">
+            <span class="selection-icon" aria-hidden="true">♪</span>
+            <span class="selection-copy"><small>ARCHIVO SELECCIONADO</small><strong id="selected-file">Ninguno todavía</strong></span>
+          </div>
+          <div class="room" aria-label="Distribución de los altavoces vista desde arriba">
+            <span class="room-front">PANTALLA / FRENTE</span>
+            <button class="speaker-button speaker--fl" type="button" data-channel="front_left" aria-label="Reproducir en frontal izquierdo">
+              <span class="speaker-glyph" aria-hidden="true"></span><span class="speaker-name">Frontal<br>izquierdo</span><span class="speaker-code">FL</span>
+            </button>
+            <button class="speaker-button speaker--c" type="button" data-channel="center" aria-label="Reproducir en central">
+              <span class="speaker-glyph" aria-hidden="true"></span><span class="speaker-name">Central</span><span class="speaker-code">C</span>
+            </button>
+            <button class="speaker-button speaker--fr" type="button" data-channel="front_right" aria-label="Reproducir en frontal derecho">
+              <span class="speaker-glyph" aria-hidden="true"></span><span class="speaker-name">Frontal<br>derecho</span><span class="speaker-code">FR</span>
+            </button>
+            <button class="speaker-button speaker--lfe" type="button" data-channel="lfe" aria-label="Reproducir en subwoofer LFE">
+              <span class="speaker-glyph speaker-glyph--sub" aria-hidden="true"></span><span class="speaker-name">Subwoofer</span><span class="speaker-code">LFE</span>
+            </button>
+            <div class="listener" aria-hidden="true"><span class="listener-rings"></span><span class="listener-core">TÚ</span></div>
+            <button class="speaker-button speaker--rl" type="button" data-channel="rear_left" aria-label="Reproducir en trasero izquierdo">
+              <span class="speaker-glyph" aria-hidden="true"></span><span class="speaker-name">Trasero<br>izquierdo</span><span class="speaker-code">RL</span>
+            </button>
+            <button class="speaker-button speaker--rr" type="button" data-channel="rear_right" aria-label="Reproducir en trasero derecho">
+              <span class="speaker-glyph" aria-hidden="true"></span><span class="speaker-name">Trasero<br>derecho</span><span class="speaker-code">RR</span>
+            </button>
+            <span class="room-rear">PARTE TRASERA</span>
+          </div>
+          <p class="speaker-hint"><span aria-hidden="true">↗</span> Pulsa un altavoz para reproducir ahí el archivo seleccionado en mono.</p>
+        </section>
 
-    <section class="panel" aria-labelledby="playing-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="playing-title">Sonando ahora</h2>
-          <p>Hasta cuatro sonidos simultáneos.</p>
-        </div>
-        <button id="stop-all" class="quiet-button" type="button">Detener todo</button>
+        <section class="panel playback-panel" aria-labelledby="playing-title">
+          <div class="section-heading playback-heading">
+            <div class="heading-copy">
+              <span class="section-number">03 / EN DIRECTO</span>
+              <h2 id="playing-title">Sonando ahora <span id="active-count" class="active-count">0 / 4</span></h2>
+            </div>
+            <button id="stop-all" class="quiet-button" type="button">Detener todo</button>
+          </div>
+          <div id="playbacks" class="playback-list"></div>
+        </section>
       </div>
-      <div id="playbacks" class="playback-list"></div>
-    </section>
+    </div>
   </main>
 </body>
 </html>

@@ -1,27 +1,26 @@
 from __future__ import absolute_import, division, print_function
 
-import argparse
 import json
 import os
 import sys
 import threading
 import uuid
+from optparse import OptionParser
 
 try:
     from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
     from SocketServer import ThreadingMixIn
     from urlparse import parse_qs, urlsplit
-    from urllib import unquote
     text_type = unicode
     string_types = (str, unicode)
 except ImportError:  # Python 3
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from socketserver import ThreadingMixIn
-    from urllib.parse import parse_qs, urlsplit, unquote
+    from urllib.parse import parse_qs, urlsplit
     text_type = str
     string_types = (str,)
 
-from mixer import CHANNELS, Mixer
+from mixer import Mixer
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -254,12 +253,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Raspberry Pi 5.1 HDMI sound server')
-    parser.add_argument('--host', default='0.0.0.0')
-    parser.add_argument('--port', type=int, default=8080)
-    parser.add_argument('--device', default='plughw:CARD=b2,DEV=0')
-    parser.add_argument('--data-dir', default=os.path.join(ROOT, 'audio'))
-    args = parser.parse_args(argv)
+    parser = OptionParser(description='Raspberry Pi 5.1 HDMI sound server')
+    parser.add_option('--host', default='0.0.0.0')
+    parser.add_option('--port', type='int', default=8080)
+    parser.add_option('--device', default='plughw:CARD=b2,DEV=0')
+    parser.add_option('--data-dir', default=os.path.join(ROOT, 'audio'))
+    args, extras = parser.parse_args(argv)
+    if extras:
+        parser.error('Unexpected arguments: %s' % ' '.join(extras))
 
     files = FileStore(args.data_dir)
     mixer = Mixer(args.device)
