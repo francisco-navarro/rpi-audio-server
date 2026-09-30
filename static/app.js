@@ -6,6 +6,10 @@ const names = {
 const filesElement = document.getElementById('files');
 const playbacksElement = document.getElementById('playbacks');
 const messageElement = document.getElementById('message');
+const selectedFileElement = document.getElementById('selected-file');
+const fileCountElement = document.getElementById('file-count');
+const activeCountElement = document.getElementById('active-count');
+const stopAllButton = document.getElementById('stop-all');
 let files = [];
 let selectedId = null;
 let lastAudioError = null;
@@ -25,6 +29,7 @@ async function request(url, options = {}) {
 
 function renderFiles() {
   filesElement.replaceChildren();
+  fileCountElement.textContent = `${files.length} ${files.length === 1 ? 'archivo' : 'archivos'}`;
   if (!files.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
@@ -34,6 +39,7 @@ function renderFiles() {
   for (const file of files) {
     const row = document.createElement('label');
     row.className = 'file-row';
+    row.classList.toggle('is-selected', file.id === selectedId);
     const input = document.createElement('input');
     input.type = 'radio';
     input.name = 'audio-file';
@@ -41,6 +47,9 @@ function renderFiles() {
     input.checked = file.id === selectedId;
     input.addEventListener('change', () => {
       selectedId = file.id;
+      for (const other of filesElement.querySelectorAll('.file-row')) {
+        other.classList.toggle('is-selected', other === row);
+      }
       updateButtons();
     });
     const name = document.createElement('span');
@@ -56,6 +65,9 @@ function renderFiles() {
 }
 
 function updateButtons() {
+  const selected = files.find(file => file.id === selectedId);
+  selectedFileElement.textContent = selected ? selected.name : 'Ninguno todavía';
+  selectedFileElement.title = selected ? selected.name : '';
   for (const button of document.querySelectorAll('[data-channel]')) {
     button.disabled = !selectedId;
   }
@@ -70,6 +82,13 @@ async function refreshFiles() {
 
 async function refreshPlaybacks() {
   const result = await request('/api/playbacks');
+  activeCountElement.textContent = `${result.playbacks.length} / 4`;
+  stopAllButton.disabled = result.playbacks.length === 0;
+  for (const button of document.querySelectorAll('[data-channel]')) {
+    button.classList.toggle('is-playing', result.playbacks.some(
+      playback => playback.channels.includes(button.dataset.channel)
+    ));
+  }
   playbacksElement.replaceChildren();
   if (!result.playbacks.length) {
     const empty = document.createElement('div');
@@ -80,9 +99,16 @@ async function refreshPlaybacks() {
   for (const playback of result.playbacks) {
     const row = document.createElement('div');
     row.className = 'playback-row';
+    const copy = document.createElement('div');
+    copy.className = 'playback-copy';
     const title = document.createElement('span');
+    title.className = 'playback-name';
     const file = files.find(item => item.id === playback.file_id);
-    title.textContent = `${file?.name || playback.file_id} · ${playback.channels.map(channel => names[channel]).join(' + ')}`;
+    title.textContent = file?.name || playback.file_id;
+    const meta = document.createElement('span');
+    meta.className = 'playback-meta';
+    meta.textContent = playback.channels.map(channel => names[channel]).join(' + ');
+    copy.append(title, meta);
     const stop = document.createElement('button');
     stop.type = 'button';
     stop.textContent = 'Detener';
@@ -92,7 +118,7 @@ async function refreshPlaybacks() {
         await refreshPlaybacks();
       } catch (error) { message(error.message, true); }
     });
-    row.append(title, stop);
+    row.append(copy, stop);
     playbacksElement.appendChild(row);
   }
 }

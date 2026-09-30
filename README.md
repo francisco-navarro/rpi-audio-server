@@ -1,7 +1,7 @@
 # Servidor de audio HDMI 5.1 para Raspberry Pi 4
 
 Aplicación web y API REST para reproducir MP3, OGG y WAV en los altavoces de un
-receptor 5.1 conectado por HDMI. Funciona con Python 2.7 y Python 3; no necesita
+receptor 5.1 conectado por HDMI. Se arranca con Python 3; no necesita
 paquetes de Python externos. Permite cuatro sonidos simultáneos, incluso en el
 mismo altavoz.
 
@@ -23,14 +23,13 @@ speaker-test -D plughw:CARD=b2,DEV=0 -c 6 -r 48000 -t wav -l 1
 Arranca la aplicación manualmente desde este directorio:
 
 ```bash
-python2.7 audio_server.py
+python3 audio_server.py
 ```
 
-También puedes usar `python3 audio_server.py`. En otro equipo o si cambia el
-nombre ALSA, indica el dispositivo y el puerto:
+En otro equipo o si cambia el nombre ALSA, indica el dispositivo y el puerto:
 
 ```bash
-python2.7 audio_server.py --device 'plughw:CARD=b2,DEV=0' --port 8080
+python3 audio_server.py --device 'plughw:CARD=b2,DEV=0' --port 8080
 ```
 
 Abre `http://<ip-de-la-raspberry>:8080/` desde un dispositivo de la misma red.
@@ -84,6 +83,6 @@ inexistentes y `409` cuando ya suenan cuatro archivos.
 python3 -m unittest discover -s tests -v
 ```
 
-En la Raspberry Pi, ejecuta el mismo comando con `python2.7` y después prueba
-los seis botones en el receptor. La correspondencia de canales del motor sigue
-el orden ALSA que verificaste con `speaker-test`.
+En la Raspberry Pi, prueba después los seis botones en el receptor. La
+correspondencia de canales del motor sigue el orden ALSA que verificaste con
+`speaker-test`.
