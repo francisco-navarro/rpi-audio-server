@@ -10,6 +10,7 @@ const selectedFileElement = document.getElementById('selected-file');
 const fileCountElement = document.getElementById('file-count');
 const activeCountElement = document.getElementById('active-count');
 const stopAllButton = document.getElementById('stop-all');
+const audioStatusElement = document.getElementById('audio-status');
 let files = [];
 let selectedId = null;
 let lastAudioError = null;
@@ -171,6 +172,14 @@ async function refresh() {
   try {
     await refreshPlaybacks();
     const health = await request('/api/health');
+    audioStatusElement.classList.toggle('error', Boolean(health.last_error));
+    if (health.last_error) {
+      audioStatusElement.textContent = health.last_error;
+    } else if (health.last_signal_at) {
+      audioStatusElement.textContent = `Señal enviada a ${health.device} a las ${new Date(health.last_signal_at * 1000).toLocaleTimeString()}.`;
+    } else {
+      audioStatusElement.textContent = `Esperando señal para ${health.device}.`;
+    }
     if (health.last_error && health.last_error !== lastAudioError) {
       message(health.last_error, true);
     }

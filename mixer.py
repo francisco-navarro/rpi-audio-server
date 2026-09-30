@@ -4,6 +4,7 @@ import array
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -93,6 +94,14 @@ def _read_exact(stream, size):
     return b''.join(chunks)
 
 
+def _process_error(log):
+    if log is None:
+        return ''
+    log.seek(0)
+    output = log.read(4096).decode('utf-8', 'replace').strip()
+    return output.splitlines()[-1] if output else ''
+
+
 class Playback(object):
     def __init__(self, file_id, path, channels):
         self.id = uuid.uuid4().hex
@@ -152,7 +161,10 @@ class Mixer(object):
         self.closed = threading.Event()
         self.playbacks = {}
         self.sink = None
+        self.sink_log = None
         self.last_error = None
+        self.last_signal_peak = 0
+        self.last_signal_at = None
         self.thread = threading.Thread(target=self._run)
         self.thread.daemon = True
         self.thread.start()
@@ -205,6 +217,8 @@ class Mixer(object):
                 'sink_running': sink_running,
                 'active_playbacks': len(self.playbacks),
                 'last_error': self.last_error,
+                'last_signal_peak': self.last_signal_peak,
+                'last_signal_at': self.last_signal_at,
             }
 
     def close(self):
@@ -220,10 +234,12 @@ class Mixer(object):
         command += ['-ac', str(len(playback.channels)), '-ar', str(RATE),
                     '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1']
         null = None
+        log = None
         try:
             null = open(os.devnull, 'wb')
+            log = tempfile.TemporaryFile(mode='w+b')
             process = subprocess.Popen(command, stdout=subprocess.PIPE,
-                                       stderr=null, stdin=null)
+                                       stderr=log, stdin=null)
             playback.process = process
             block_bytes = FRAMES_PER_BLOCK * len(playback.channels) * SAMPLE_BYTES
             while not playback.stop_event.is_set():
@@ -243,7 +259,8 @@ class Mixer(object):
                 process.terminate()
             return_code = process.wait()
             if return_code and not playback.stop_event.is_set():
-                playback.error = 'Cannot decode audio file'
+                playback.error = 'FFmpeg no pudo leer el archivo: %s' % (
+                    _process_error(log) or 'salida %s' % return_code)
                 with self.lock:
                     self.last_error = playback.error
         except (OSError, IOError) as exc:
@@ -257,25 +274,34 @@ class Mixer(object):
                 playback.process.stdout.close()
             if null is not None:
                 null.close()
+            if log is not None:
+                log.close()
 
     def _open_sink(self):
         if self.sink is not None:
             if self.sink.poll() is None:
                 return True
-            self.last_error = 'HDMI output process stopped unexpectedly'
+            self.last_error = 'Salida HDMI detenida: %s' % (
+                _process_error(self.sink_log) or 'aplay terminó con código %s' % self.sink.returncode)
             self._close_sink()
             return False
         self._close_sink()
         command = [self.aplay, '-q', '-D', self.device, '-t', 'raw',
-                   '-f', 'S16_LE', '-r', str(RATE), '-c', str(CHANNEL_COUNT), '-']
+                   '-f', 'S16_LE', '-r', str(RATE), '-c', str(CHANNEL_COUNT),
+                   '-m', 'FL,FR,RL,RR,FC,LFE', '-']
         null = None
+        log = None
         try:
             null = open(os.devnull, 'wb')
+            log = tempfile.TemporaryFile(mode='w+b')
             self.sink = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                         stdout=null, stderr=null)
+                                         stdout=null, stderr=log)
+            self.sink_log = log
             return True
         except OSError as exc:
-            self.last_error = 'Cannot start ALSA output: %s' % exc
+            self.last_error = 'No se pudo iniciar la salida HDMI: %s' % exc
+            if log is not None:
+                log.close()
             return False
         finally:
             if null is not None:
@@ -283,20 +309,32 @@ class Mixer(object):
 
     def _close_sink(self):
         sink = self.sink
+        log = self.sink_log
         self.sink = None
+        self.sink_log = None
         if sink is None:
+            if log is not None:
+                log.close()
             return
         try:
             if sink.stdin:
                 sink.stdin.close()
         except IOError:
             pass
+        # Let aplay drain its ALSA buffer. Terminating it immediately can
+        # discard an entire short effect before the receiver plays it.
         if sink.poll() is None:
-            sink.terminate()
+            deadline = time.time() + 2.0
+            while sink.poll() is None and time.time() < deadline:
+                time.sleep(0.02)
+            if sink.poll() is None:
+                sink.terminate()
         try:
             sink.wait()
         except OSError:
             pass
+        if log is not None:
+            log.close()
 
     def _run(self):
         next_tick = time.time()
@@ -331,12 +369,21 @@ class Mixer(object):
             for playback_id in finished:
                 self.stop(playback_id)
 
+            mixed = mix_block(inputs)
             try:
-                self.sink.stdin.write(mix_block(inputs))
+                self.sink.stdin.write(mixed)
                 self.sink.stdin.flush()
+                if inputs:
+                    peak = max(abs(sample) for sample in _samples(mixed))
+                    if peak:
+                        with self.lock:
+                            self.last_signal_peak = peak
+                            self.last_signal_at = time.time()
             except (OSError, IOError) as exc:
+                detail = _process_error(self.sink_log)
                 with self.lock:
-                    self.last_error = 'HDMI output failed: %s' % exc
+                    self.last_error = 'Fallo de salida HDMI: %s%s' % (
+                        exc, ' · %s' % detail if detail else '')
                 self.stop_all()
                 self._close_sink()
 

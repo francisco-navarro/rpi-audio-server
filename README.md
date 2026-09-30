@@ -86,3 +86,19 @@ python3 -m unittest discover -s tests -v
 En la Raspberry Pi, prueba después los seis botones en el receptor. La
 correspondencia de canales del motor sigue el orden ALSA que verificaste con
 `speaker-test`.
+
+## Si no se oye nada
+
+Tras pulsar un altavoz, consulta `http://<ip-de-la-raspberry>:8080/api/health`
+o el estado al pie de **Sonando ahora**. `last_error` recoge el mensaje real de
+FFmpeg o `aplay`. Si `last_signal_peak` es mayor que cero y
+`last_signal_at` tiene una hora reciente, el servidor ha enviado muestras de
+audio a ALSA; comprueba entonces el dispositivo elegido y la entrada del
+receptor. Si ambos siguen vacíos, prueba otro archivo y revisa el error de
+decodificación.
+
+Para repetir la comprobación física del dispositivo configurado:
+
+```bash
+speaker-test -D plughw:CARD=b2,DEV=0 -c 6 -r 48000 -t wav -l 1
+```

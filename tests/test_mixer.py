@@ -3,10 +3,11 @@ from __future__ import absolute_import, division, print_function
 import array
 import os
 import sys
+import threading
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from mixer import CHANNELS, FRAMES_PER_BLOCK, Playback, mix_block
+from mixer import CHANNELS, FRAMES_PER_BLOCK, Mixer, Playback, mix_block
 
 
 def pcm(values):
@@ -56,6 +57,38 @@ class MixerTests(unittest.TestCase):
         self.assertEqual(result[0], 12000)
         self.assertLess(result[1], 12000)
         self.assertGreater(result[-1], result[1])
+
+    def test_output_is_allowed_to_drain_before_exit(self):
+        class Sink(object):
+            def __init__(self):
+                self.drained = False
+                self.terminated = False
+                self.stdin = self
+
+            def close(self):
+                timer = threading.Timer(0.05, self.finish)
+                timer.start()
+
+            def finish(self):
+                self.drained = True
+
+            def poll(self):
+                return 0 if self.drained else None
+
+            def terminate(self):
+                self.terminated = True
+                self.drained = True
+
+            def wait(self):
+                return 0
+
+        mixer = Mixer.__new__(Mixer)
+        mixer.sink = Sink()
+        mixer.sink_log = None
+        sink = mixer.sink
+        mixer._close_sink()
+        self.assertTrue(sink.drained)
+        self.assertFalse(sink.terminated)
 
 
 if __name__ == '__main__':
