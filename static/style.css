@@ -165,6 +165,11 @@ p { margin: 0; color: var(--muted); line-height: 1.5; }
 .playback-row button { border: 1px solid #58616e; border-radius: 8px; background: transparent; color: #e5e9f0; padding: 7px 10px; font-size: .75rem; }
 .audio-status { margin-top: 5px; padding: 11px 12px; border: 1px solid #3e4d4a; border-radius: 8px; background: #1f2b2a; color: #afcec6; font-size: .76rem; overflow-wrap: anywhere; }
 .audio-status.error { border-color: #87565b; background: #412a31; color: #ffd9dd; }
+.audio-traces { margin-top: 12px; border-top: 1px solid #353c48; padding-top: 11px; }
+.audio-traces summary { color: var(--teal); font-size: .78rem; font-weight: 700; cursor: pointer; }
+.audio-metrics { margin-top: 10px; color: #aebfc4; font-size: .73rem; }
+.audio-traces h3 { margin: 15px 0 6px; color: #cad5de; font-size: .75rem; }
+.audio-traces pre { max-height: 220px; margin: 0; padding: 11px; overflow: auto; border: 1px solid #35404c; border-radius: 8px; background: #0f151d; color: #b5c8cb; font-size: .7rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .empty { color: #98a3b0; padding: 20px 14px; font-size: .85rem; }
 .message:not(:empty) { margin: 0 0 19px; padding: 12px 16px; border: 1px solid #5d725d; border-radius: 11px; background: #23362f; color: #d9f5e6; font-size: .85rem; }
 .message.error:not(:empty) { border-color: #925d61; background: #4a292f; color: #ffe5e7; }

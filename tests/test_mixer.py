@@ -84,7 +84,7 @@ class MixerTests(unittest.TestCase):
 
         mixer = Mixer.__new__(Mixer)
         mixer.sink = Sink()
-        mixer.sink_log = None
+        mixer.sink_reader = None
         sink = mixer.sink
         mixer._close_sink()
         self.assertTrue(sink.drained)

@@ -1,10 +1,10 @@
 from __future__ import absolute_import, division, print_function
 
 import array
+from collections import deque
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -19,6 +19,7 @@ RATE = 48000
 CHANNEL_COUNT = 6
 FRAMES_PER_BLOCK = 960  # 20 ms
 SAMPLE_BYTES = 2
+BLOCK_SECONDS = float(FRAMES_PER_BLOCK) / RATE
 
 # This is the ALSA 5.1 order used by speaker-test with the tested HDMI device.
 CHANNELS = {
@@ -94,14 +95,6 @@ def _read_exact(stream, size):
     return b''.join(chunks)
 
 
-def _process_error(log):
-    if log is None:
-        return ''
-    log.seek(0)
-    output = log.read(4096).decode('utf-8', 'replace').strip()
-    return output.splitlines()[-1] if output else ''
-
-
 class Playback(object):
     def __init__(self, file_id, path, channels):
         self.id = uuid.uuid4().hex
@@ -151,20 +144,31 @@ class Playback(object):
 
 
 class Mixer(object):
-    def __init__(self, device, max_playbacks=4, ffmpeg='ffmpeg', aplay='aplay'):
+    def __init__(self, device, max_playbacks=4, ffmpeg='ffmpeg', aplay='aplay',
+                 debug_audio=False):
         self.device = device
         self.max_playbacks = max_playbacks
         self.ffmpeg = ffmpeg
         self.aplay = aplay
+        self.debug_audio = debug_audio
         self.lock = threading.RLock()
         self.wake = threading.Event()
         self.closed = threading.Event()
         self.playbacks = {}
         self.sink = None
-        self.sink_log = None
+        self.sink_reader = None
+        self.alsa_log = deque(maxlen=80)
+        self.ffmpeg_log = deque(maxlen=80)
         self.last_error = None
         self.last_signal_peak = 0
         self.last_signal_at = None
+        self.decode_starvations = 0
+        self.late_blocks = 0
+        self.alsa_underruns = 0
+        self.last_mix_ms = 0.0
+        self.max_mix_ms = 0.0
+        self.last_write_ms = 0.0
+        self.max_write_ms = 0.0
         self.thread = threading.Thread(target=self._run)
         self.thread.daemon = True
         self.thread.start()
@@ -219,7 +223,39 @@ class Mixer(object):
                 'last_error': self.last_error,
                 'last_signal_peak': self.last_signal_peak,
                 'last_signal_at': self.last_signal_at,
+                'alsa_log': list(self.alsa_log),
+                'ffmpeg_log': list(self.ffmpeg_log),
+                'decode_starvations': self.decode_starvations,
+                'late_blocks': self.late_blocks,
+                'alsa_underruns': self.alsa_underruns,
+                'last_mix_ms': self.last_mix_ms,
+                'max_mix_ms': self.max_mix_ms,
+                'last_write_ms': self.last_write_ms,
+                'max_write_ms': self.max_write_ms,
             }
+
+    def _log(self, kind, line):
+        with self.lock:
+            (self.alsa_log if kind == 'ALSA' else self.ffmpeg_log).append(line)
+            if kind == 'ALSA' and ('underrun' in line.lower() or
+                                   'xrun' in line.lower()):
+                self.alsa_underruns += 1
+        if self.debug_audio:
+            try:
+                os.write(2, ('[%s] %s\n' % (kind, line)).encode('utf-8', 'replace'))
+            except OSError:
+                pass
+
+    def _collect_output(self, stream, kind, prefix='', local=None):
+        try:
+            for raw in iter(stream.readline, b''):
+                line = raw.decode('utf-8', 'replace').rstrip('\r\n')[:500]
+                if line:
+                    if local is not None:
+                        local.append(line)
+                    self._log(kind, prefix + line)
+        finally:
+            stream.close()
 
     def close(self):
         self.closed.set()
@@ -229,18 +265,26 @@ class Mixer(object):
         self._close_sink()
 
     def _decode(self, playback):
-        command = [self.ffmpeg, '-nostdin', '-loglevel', 'error', '-i',
+        command = [self.ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'info',
+                   '-nostats', '-i',
                    playback.path, '-map', '0:a:0', '-vn']
         command += ['-ac', str(len(playback.channels)), '-ar', str(RATE),
                     '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1']
         null = None
-        log = None
+        reader = None
+        lines = deque(maxlen=80)
         try:
             null = open(os.devnull, 'wb')
-            log = tempfile.TemporaryFile(mode='w+b')
             process = subprocess.Popen(command, stdout=subprocess.PIPE,
-                                       stderr=log, stdin=null)
+                                       stderr=subprocess.PIPE, stdin=null)
             playback.process = process
+            self._log('FFmpeg', '[%s] Iniciando decodificación: %s' %
+                      (playback.id[:8], playback.path))
+            reader = threading.Thread(target=self._collect_output,
+                                      args=(process.stderr, 'FFmpeg',
+                                            '[%s] ' % playback.id[:8], lines))
+            reader.daemon = True
+            reader.start()
             block_bytes = FRAMES_PER_BLOCK * len(playback.channels) * SAMPLE_BYTES
             while not playback.stop_event.is_set():
                 chunk = _read_exact(process.stdout, block_bytes)
@@ -258,9 +302,10 @@ class Mixer(object):
             if playback.stop_event.is_set() and process.poll() is None:
                 process.terminate()
             return_code = process.wait()
+            reader.join(1)
             if return_code and not playback.stop_event.is_set():
                 playback.error = 'FFmpeg no pudo leer el archivo: %s' % (
-                    _process_error(log) or 'salida %s' % return_code)
+                    lines[-1] if lines else 'salida %s' % return_code)
                 with self.lock:
                     self.last_error = playback.error
         except (OSError, IOError) as exc:
@@ -274,47 +319,47 @@ class Mixer(object):
                 playback.process.stdout.close()
             if null is not None:
                 null.close()
-            if log is not None:
-                log.close()
+            if reader is not None and reader.is_alive():
+                reader.join(1)
 
     def _open_sink(self):
         if self.sink is not None:
             if self.sink.poll() is None:
                 return True
+            if self.sink_reader is not None:
+                self.sink_reader.join(1)
             self.last_error = 'Salida HDMI detenida: %s' % (
-                _process_error(self.sink_log) or 'aplay terminó con código %s' % self.sink.returncode)
+                self.alsa_log[-1] if self.alsa_log else
+                'aplay terminó con código %s' % self.sink.returncode)
             self._close_sink()
             return False
         self._close_sink()
-        command = [self.aplay, '-q', '-D', self.device, '-t', 'raw',
+        command = [self.aplay, '-v', '-D', self.device, '-t', 'raw',
                    '-f', 'S16_LE', '-r', str(RATE), '-c', str(CHANNEL_COUNT),
                    '-m', 'FL,FR,RL,RR,FC,LFE', '-']
-        null = None
-        log = None
         try:
-            null = open(os.devnull, 'wb')
-            log = tempfile.TemporaryFile(mode='w+b')
+            with self.lock:
+                self.alsa_log.clear()
+            self._log('ALSA', 'Iniciando aplay con dispositivo %s' % self.device)
             self.sink = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                         stdout=null, stderr=log)
-            self.sink_log = log
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT)
+            self.sink_reader = threading.Thread(target=self._collect_output,
+                                                args=(self.sink.stdout, 'ALSA'))
+            self.sink_reader.daemon = True
+            self.sink_reader.start()
             return True
         except OSError as exc:
             self.last_error = 'No se pudo iniciar la salida HDMI: %s' % exc
-            if log is not None:
-                log.close()
+            self._log('ALSA', self.last_error)
             return False
-        finally:
-            if null is not None:
-                null.close()
 
     def _close_sink(self):
         sink = self.sink
-        log = self.sink_log
+        reader = self.sink_reader
         self.sink = None
-        self.sink_log = None
+        self.sink_reader = None
         if sink is None:
-            if log is not None:
-                log.close()
             return
         try:
             if sink.stdin:
@@ -329,12 +374,17 @@ class Mixer(object):
                 time.sleep(0.02)
             if sink.poll() is None:
                 sink.terminate()
+        return_code = None
         try:
-            sink.wait()
+            return_code = sink.wait()
         except OSError:
             pass
-        if log is not None:
-            log.close()
+        if reader is not None:
+            reader.join(1)
+        if return_code and return_code > 0 and self.last_error is None:
+            detail = self.alsa_log[-1] if self.alsa_log else ''
+            self.last_error = 'aplay terminó con código %s%s' % (
+                return_code, ': %s' % detail if detail else '')
 
     def _run(self):
         next_tick = time.time()
@@ -365,14 +415,27 @@ class Mixer(object):
                 except queue.Empty:
                     if playback.done_event.is_set():
                         finished.append(playback.id)
+                    elif playback.state == 'playing':
+                        with self.lock:
+                            self.decode_starvations += 1
 
             for playback_id in finished:
                 self.stop(playback_id)
 
+            mix_started = time.time()
             mixed = mix_block(inputs)
+            mix_ms = (time.time() - mix_started) * 1000
+            with self.lock:
+                self.last_mix_ms = mix_ms
+                self.max_mix_ms = max(self.max_mix_ms, mix_ms)
             try:
+                write_started = time.time()
                 self.sink.stdin.write(mixed)
                 self.sink.stdin.flush()
+                write_ms = (time.time() - write_started) * 1000
+                with self.lock:
+                    self.last_write_ms = write_ms
+                    self.max_write_ms = max(self.max_write_ms, write_ms)
                 if inputs:
                     peak = max(abs(sample) for sample in _samples(mixed))
                     if peak:
@@ -380,15 +443,19 @@ class Mixer(object):
                             self.last_signal_peak = peak
                             self.last_signal_at = time.time()
             except (OSError, IOError) as exc:
-                detail = _process_error(self.sink_log)
+                self._close_sink()
+                with self.lock:
+                    detail = self.alsa_log[-1] if self.alsa_log else ''
                 with self.lock:
                     self.last_error = 'Fallo de salida HDMI: %s%s' % (
                         exc, ' · %s' % detail if detail else '')
                 self.stop_all()
-                self._close_sink()
 
-            next_tick += float(FRAMES_PER_BLOCK) / RATE
+            next_tick += BLOCK_SECONDS
             now = time.time()
+            if now - next_tick > 0.005:
+                with self.lock:
+                    self.late_blocks += 1
             if next_tick > now:
                 time.sleep(next_tick - now)
             else:

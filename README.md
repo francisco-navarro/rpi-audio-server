@@ -89,13 +89,39 @@ correspondencia de canales del motor sigue el orden ALSA que verificaste con
 
 ## Si no se oye nada
 
-Tras pulsar un altavoz, consulta `http://<ip-de-la-raspberry>:8080/api/health`
-o el estado al pie de **Sonando ahora**. `last_error` recoge el mensaje real de
-FFmpeg o `aplay`. Si `last_signal_peak` es mayor que cero y
+Tras pulsar un altavoz, abre **Ver trazas de audio** bajo **Sonando ahora** o
+consulta `http://<ip-de-la-raspberry>:8080/api/health`. Los campos `alsa_log` y
+`ffmpeg_log` contienen las últimas 80 líneas de cada programa, también cuando
+no se produce un error. Para verlas en directo en la terminal, arranca así:
+
+```bash
+python3 audio_server.py --debug-audio
+```
+
+`last_error` recoge el último fallo detectado. Si `last_signal_peak` es mayor que cero y
 `last_signal_at` tiene una hora reciente, el servidor ha enviado muestras de
 audio a ALSA; comprueba entonces el dispositivo elegido y la entrada del
 receptor. Si ambos siguen vacíos, prueba otro archivo y revisa el error de
 decodificación.
+
+### Si el audio se corta
+
+Abre **Ver trazas de audio** mientras suena un archivo. Los contadores son
+acumulados desde el arranque, así que observa si aumentan durante los cortes:
+
+- `late_blocks`: la salida no completó a tiempo alguno de los bloques de 20 ms.
+- `decode_starvations`: el mezclador esperaba un bloque que FFmpeg aún no había entregado.
+- `alsa_underruns`: `aplay` informó de falta de muestras (`underrun`/`xrun`).
+- `max_mix_ms`: tiempo máximo empleado en mezclar un bloque; cerca de 20 ms apunta a saturación del hilo de mezcla.
+- `max_write_ms`: tiempo máximo de escritura a ALSA; si crece, la salida está bloqueando al mezclador.
+
+En otra terminal de la Raspberry Pi, ejecuta `top -H`, pulsa `P` para ordenar
+por CPU y reproduce el archivo. Mira los hilos de `python3` y los procesos
+`ffmpeg` y `aplay`. En la Raspberry Pi 4, un proceso cerca del 100 % puede
+estar ocupando **un núcleo completo** aunque los otros estén libres. Si el
+uso de CPU sube a la vez que aumentan `late_blocks` o
+`decode_starvations`, la CPU es una causa probable. Si sólo aparecen
+`alsa_underruns` o crece `max_write_ms`, revisa la salida ALSA y el receptor.
 
 Para repetir la comprobación física del dispositivo configurado:
 

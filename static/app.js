@@ -11,6 +11,9 @@ const fileCountElement = document.getElementById('file-count');
 const activeCountElement = document.getElementById('active-count');
 const stopAllButton = document.getElementById('stop-all');
 const audioStatusElement = document.getElementById('audio-status');
+const alsaLogElement = document.getElementById('alsa-log');
+const ffmpegLogElement = document.getElementById('ffmpeg-log');
+const audioMetricsElement = document.getElementById('audio-metrics');
 let files = [];
 let selectedId = null;
 let lastAudioError = null;
@@ -172,6 +175,9 @@ async function refresh() {
   try {
     await refreshPlaybacks();
     const health = await request('/api/health');
+    alsaLogElement.textContent = health.alsa_log?.join('\n') || 'Sin actividad todavía.';
+    ffmpegLogElement.textContent = health.ffmpeg_log?.join('\n') || 'Sin actividad todavía.';
+    audioMetricsElement.textContent = `Retrasos: ${health.late_blocks ?? 0} · Sin datos de FFmpeg: ${health.decode_starvations ?? 0} · Cortes ALSA: ${health.alsa_underruns ?? 0} · Mezcla máx.: ${(health.max_mix_ms ?? 0).toFixed(1)} ms · Escritura máx.: ${(health.max_write_ms ?? 0).toFixed(1)} ms`;
     audioStatusElement.classList.toggle('error', Boolean(health.last_error));
     if (health.last_error) {
       audioStatusElement.textContent = health.last_error;

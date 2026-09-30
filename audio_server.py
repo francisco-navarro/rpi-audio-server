@@ -258,12 +258,14 @@ def main(argv=None):
     parser.add_option('--port', type='int', default=8080)
     parser.add_option('--device', default='plughw:CARD=b2,DEV=0')
     parser.add_option('--data-dir', default=os.path.join(ROOT, 'audio'))
+    parser.add_option('--debug-audio', action='store_true', default=False,
+                      help='Show ALSA and FFmpeg output in the terminal')
     args, extras = parser.parse_args(argv)
     if extras:
         parser.error('Unexpected arguments: %s' % ' '.join(extras))
 
     files = FileStore(args.data_dir)
-    mixer = Mixer(args.device)
+    mixer = Mixer(args.device, debug_audio=args.debug_audio)
     server = ThreadedHTTPServer((args.host, args.port), Handler, files, mixer)
     print('Open http://<raspberry-pi-ip>:%d/ on your local network' % args.port)
     try:
