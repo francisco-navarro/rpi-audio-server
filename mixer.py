@@ -57,29 +57,26 @@ def mix_block(inputs):
     Mono inputs contain one sample per frame; stereo inputs contain left then
     right. When several sounds use one speaker, average them to avoid clipping.
     """
-    totals = [0] * (FRAMES_PER_BLOCK * CHANNEL_COUNT)
-    counts = [0] * CHANNEL_COUNT
+    streams_by_channel = [[] for _ in range(CHANNEL_COUNT)]
     for pcm, destinations in inputs:
         source_channels = len(destinations)
         expected = FRAMES_PER_BLOCK * source_channels * SAMPLE_BYTES
         if len(pcm) != expected:
             raise ValueError('PCM block has the wrong length')
         source = _samples(pcm)
-        for destination in destinations:
-            counts[destination] += 1
-        for frame in range(FRAMES_PER_BLOCK):
-            source_offset = frame * source_channels
-            output_offset = frame * CHANNEL_COUNT
-            for source_index, destination in enumerate(destinations):
-                totals[output_offset + destination] += source[source_offset + source_index]
+        for source_index, destination in enumerate(destinations):
+            streams_by_channel[destination].append(source[source_index::source_channels])
 
-    output = array.array('h')
-    for frame in range(FRAMES_PER_BLOCK):
-        offset = frame * CHANNEL_COUNT
-        for destination in range(CHANNEL_COUNT):
-            count = counts[destination]
-            value = totals[offset + destination] // count if count else 0
-            output.append(max(-32768, min(32767, value)))
+    # Array slices copy samples in C. The usual case (one sound per speaker)
+    # avoids a Python loop over the 5.1 frames entirely.
+    output = array.array('h', [0]) * (FRAMES_PER_BLOCK * CHANNEL_COUNT)
+    for destination, streams in enumerate(streams_by_channel):
+        if len(streams) == 1:
+            output[destination::CHANNEL_COUNT] = streams[0]
+        elif len(streams) > 1:
+            count = len(streams)
+            output[destination::CHANNEL_COUNT] = array.array(
+                'h', (sum(values) // count for values in zip(*streams)))
     return _as_bytes(output)
 
 

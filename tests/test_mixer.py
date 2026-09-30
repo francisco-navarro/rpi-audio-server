@@ -42,6 +42,15 @@ class MixerTests(unittest.TestCase):
         result = decode(mix_block(inputs))
         self.assertEqual(list(result[:6]), [0, 0, 0, 0, 30000, 0])
 
+    def test_overlapping_stereo_and_mono_average_only_shared_speaker(self):
+        stereo = pcm([-3001, 7000] * FRAMES_PER_BLOCK)
+        mono = pcm([1000] * FRAMES_PER_BLOCK)
+        result = decode(mix_block([
+            (stereo, (CHANNELS['front_left'], CHANNELS['rear_left'])),
+            (mono, (CHANNELS['front_left'],)),
+        ]))
+        self.assertEqual(list(result[:6]), [-1001, 0, 7000, 0, 0, 0])
+
     def test_all_six_destinations_are_separate(self):
         for name, index in CHANNELS.items():
             source = pcm([100] * FRAMES_PER_BLOCK)
