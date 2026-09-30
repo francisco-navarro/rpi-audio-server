@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audio HDMI 5.1</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <p class="eyebrow">Raspberry Pi · HDMI 5.1</p>
+      <h1>Enviar sonido</h1>
+      <p>Elige un archivo y pulsa el altavoz en el que quieres escucharlo.</p>
+    </header>
+
+    <div id="message" class="message" role="status" aria-live="polite"></div>
+
+    <section class="panel" aria-labelledby="library-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="library-title">Archivos de audio</h2>
+          <p>MP3, OGG o WAV · hasta 100 MB por archivo</p>
+        </div>
+        <label class="upload-button">
+          Subir archivo
+          <input id="upload" type="file" accept=".mp3,.ogg,.wav,audio/mpeg,audio/ogg,audio/wav">
+        </label>
+      </div>
+      <div id="files" class="file-list" role="radiogroup" aria-label="Archivo seleccionado"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="speakers-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="speakers-title">Altavoces</h2>
+          <p>La web envía el archivo seleccionado en mono al altavoz que pulses.</p>
+        </div>
+      </div>
+      <div class="speaker-grid">
+        <button type="button" data-channel="front_left">Frontal izquierdo</button>
+        <button type="button" data-channel="center">Central</button>
+        <button type="button" data-channel="front_right">Frontal derecho</button>
+        <button type="button" data-channel="rear_left">Trasero izquierdo</button>
+        <button type="button" data-channel="lfe">Subwoofer · LFE</button>
+        <button type="button" data-channel="rear_right">Trasero derecho</button>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="playing-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="playing-title">Sonando ahora</h2>
+          <p>Hasta cuatro sonidos simultáneos.</p>
+        </div>
+        <button id="stop-all" class="quiet-button" type="button">Detener todo</button>
+      </div>
+      <div id="playbacks" class="playback-list"></div>
+    </section>
+  </main>
+</body>
+</html>
