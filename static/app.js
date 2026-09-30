@@ -17,6 +17,31 @@ const audioMetricsElement = document.getElementById('audio-metrics');
 let files = [];
 let selectedId = null;
 let lastAudioError = null;
+let ost = null;
+
+const ostPlaylistElement = document.getElementById('ost-playlist');
+const ostLeftElement = document.getElementById('ost-left');
+const ostRightElement = document.getElementById('ost-right');
+
+for (const [channel, label] of Object.entries(names)) {
+  for (const select of [ostLeftElement, ostRightElement]) {
+    const option = document.createElement('option');
+    option.value = channel;
+    option.textContent = label;
+    select.appendChild(option);
+  }
+}
+
+for (const tab of document.querySelectorAll('.tab-button')) {
+  tab.addEventListener('click', () => {
+    for (const other of document.querySelectorAll('.tab-button')) {
+      const active = other === tab;
+      other.classList.toggle('is-active', active);
+      other.setAttribute('aria-selected', String(active));
+      document.getElementById(other.getAttribute('aria-controls')).hidden = !active;
+    }
+  });
+}
 
 function message(text, isError = false) {
   messageElement.textContent = text;
@@ -171,9 +196,114 @@ document.getElementById('stop-all').addEventListener('click', async () => {
   } catch (error) { message(error.message, true); }
 });
 
+function renderOST() {
+  if (!ost) return;
+  document.getElementById('ost-count').textContent = `${ost.playlist.length} ${ost.playlist.length === 1 ? 'pista' : 'pistas'}`;
+  document.getElementById('ost-current').textContent = ost.current?.name || 'Selecciona una pista';
+  document.getElementById('ost-state').textContent = {
+    playing: 'Reproduciendo la banda sonora',
+    paused: 'En pausa',
+    stopped: 'La playlist está detenida.'
+  }[ost.state] || ost.state;
+  ostLeftElement.value = ost.channels[0];
+  ostRightElement.value = ost.channels[1];
+  const shuffleButton = document.getElementById('ost-shuffle');
+  shuffleButton.classList.toggle('is-active', ost.shuffle);
+  shuffleButton.setAttribute('aria-pressed', String(ost.shuffle));
+  shuffleButton.setAttribute('aria-label', ost.shuffle ? 'Desactivar modo aleatorio' : 'Activar modo aleatorio');
+  const hasTracks = ost.playlist.length > 0;
+  for (const id of ['ost-play', 'ost-next', 'ost-previous']) {
+    document.getElementById(id).disabled = !hasTracks;
+  }
+  document.getElementById('ost-pause').disabled = ost.state !== 'playing';
+  ostPlaylistElement.replaceChildren();
+  if (!hasTracks) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'Sube un MP3 para crear tu playlist.';
+    ostPlaylistElement.appendChild(empty);
+  }
+  for (const [index, track] of ost.playlist.entries()) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'ost-track';
+    row.classList.toggle('is-current', ost.current?.id === track.id);
+    const number = document.createElement('span');
+    number.className = 'ost-track-number';
+    number.textContent = String(index + 1).padStart(2, '0');
+    const title = document.createElement('span');
+    title.className = 'ost-track-name';
+    title.textContent = track.name;
+    const icon = document.createElement('span');
+    icon.className = 'ost-track-icon';
+    icon.textContent = ost.current?.id === track.id && ost.state === 'playing' ? '♫' : '▶';
+    row.append(number, title, icon);
+    row.addEventListener('click', () => postOST('/api/ost/play', {file_id: track.id}));
+    ostPlaylistElement.appendChild(row);
+  }
+}
+
+async function refreshOST() {
+  ost = await request('/api/ost');
+  renderOST();
+}
+
+async function postOST(path, payload) {
+  try {
+    ost = await request(path, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload || {})
+    });
+    renderOST();
+  } catch (error) {
+    message(error.message, true);
+    await refreshOST();
+  }
+}
+
+document.getElementById('ost-upload').addEventListener('change', async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (!/\.mp3$/i.test(file.name) || file.size > 100 * 1024 * 1024) {
+    message('Selecciona un MP3 de hasta 100 MB.', true);
+    event.target.value = '';
+    return;
+  }
+  try {
+    message(`Subiendo ${file.name} a OST…`);
+    await request(`/api/ost/upload?filename=${encodeURIComponent(file.name)}`,
+                  {method: 'POST', body: file});
+    await refreshOST();
+    message(`${file.name} añadido a OST.`);
+  } catch (error) { message(error.message, true); }
+  event.target.value = '';
+});
+
+for (const [id, path] of Object.entries({
+  'ost-previous': '/api/ost/previous', 'ost-play': '/api/ost/play',
+  'ost-pause': '/api/ost/pause', 'ost-next': '/api/ost/next'
+})) {
+  document.getElementById(id).addEventListener('click', () => postOST(path));
+}
+document.getElementById('ost-shuffle').addEventListener('click', () => {
+  if (ost) postOST('/api/ost/shuffle', {shuffle: !ost.shuffle});
+});
+for (const select of [ostLeftElement, ostRightElement]) {
+  select.addEventListener('change', () => {
+    const channels = [ostLeftElement.value, ostRightElement.value];
+    if (channels[0] === channels[1]) {
+      message('Elige dos altavoces distintos para el estéreo.', true);
+      renderOST();
+      return;
+    }
+    postOST('/api/ost/channels', {channels});
+  });
+}
+
 async function refresh() {
   try {
     await refreshPlaybacks();
+    await refreshOST();
     const health = await request('/api/health');
     alsaLogElement.textContent = health.alsa_log?.join('\n') || 'Sin actividad todavía.';
     ffmpegLogElement.textContent = health.ffmpeg_log?.join('\n') || 'Sin actividad todavía.';

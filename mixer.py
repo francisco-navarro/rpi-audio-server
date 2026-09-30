@@ -93,17 +93,23 @@ def _read_exact(stream, size):
 
 
 class Playback(object):
-    def __init__(self, file_id, path, channels):
+    def __init__(self, file_id, path, channels, kind='effect', on_complete=None,
+                 paused=False):
         self.id = uuid.uuid4().hex
         self.file_id = file_id
         self.path = path
         self.channels = tuple(channels)
+        self.kind = kind
+        self.on_complete = on_complete
         self.destination_indices = tuple(CHANNELS[name] for name in channels)
         self.blocks = queue.Queue(maxsize=12)
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
+        if paused:
+            self.pause_event.set()
         self.done_event = threading.Event()
         self.process = None
-        self.state = 'loading'
+        self.state = 'paused' if paused else 'loading'
         self.error = None
         self.lfe_level = 0.0
 
@@ -113,6 +119,7 @@ class Playback(object):
             'file_id': self.file_id,
             'channels': list(self.channels),
             'state': self.state,
+            'kind': self.kind,
         }
 
     def stop(self):
@@ -141,7 +148,7 @@ class Playback(object):
 
 
 class Mixer(object):
-    def __init__(self, device, max_playbacks=4, ffmpeg='ffmpeg', aplay='aplay',
+    def __init__(self, device, max_playbacks=5, ffmpeg='ffmpeg', aplay='aplay',
                  debug_audio=False):
         self.device = device
         self.max_playbacks = max_playbacks
@@ -170,7 +177,8 @@ class Mixer(object):
         self.thread.daemon = True
         self.thread.start()
 
-    def play(self, file_id, path, channels):
+    def play(self, file_id, path, channels, kind='effect', on_complete=None,
+             paused=False):
         if len(channels) not in (1, 2):
             raise ValueError('Select one or two channels')
         if any(name not in CHANNELS for name in channels):
@@ -178,11 +186,14 @@ class Mixer(object):
         if len(set(channels)) != len(channels):
             raise ValueError('Stereo destinations must be different')
         with self.lock:
-            if len(self.playbacks) >= self.max_playbacks:
+            if (len(self.playbacks) >= self.max_playbacks or
+                    kind == 'effect' and sum(item.kind == 'effect' for item in
+                                             self.playbacks.values()) >= 4):
                 raise OverflowError('Maximum simultaneous sounds reached')
             if self.closed.is_set():
                 raise RuntimeError('Audio engine is closed')
-            playback = Playback(file_id, path, channels)
+            playback = Playback(file_id, path, channels, kind, on_complete,
+                                paused)
             self.last_error = None
             self.playbacks[playback.id] = playback
             self.wake.set()
@@ -191,21 +202,51 @@ class Mixer(object):
         worker.start()
         return playback.describe()
 
-    def list_playbacks(self):
+    def list_playbacks(self, kind=None):
         with self.lock:
-            return [item.describe() for item in self.playbacks.values()]
+            return [item.describe() for item in self.playbacks.values()
+                    if kind is None or item.kind == kind]
 
-    def stop(self, playback_id):
+    def has_playback(self, playback_id):
         with self.lock:
-            playback = self.playbacks.pop(playback_id, None)
+            return playback_id in self.playbacks
+
+    def pause(self, playback_id):
+        with self.lock:
+            playback = self.playbacks.get(playback_id)
+            if playback is None:
+                return False
+            playback.pause_event.set()
+            playback.state = 'paused'
+            self.wake.set()
+            return True
+
+    def resume(self, playback_id):
+        with self.lock:
+            playback = self.playbacks.get(playback_id)
+            if playback is None:
+                return False
+            playback.pause_event.clear()
+            playback.state = 'playing'
+            self.wake.set()
+            return True
+
+    def stop(self, playback_id, kind=None):
+        with self.lock:
+            playback = self.playbacks.get(playback_id)
+            if playback is not None and (kind is None or playback.kind == kind):
+                self.playbacks.pop(playback_id, None)
+            else:
+                playback = None
         if playback is None:
             return False
         playback.stop()
         return True
 
-    def stop_all(self):
+    def stop_all(self, kind=None):
         with self.lock:
-            ids = list(self.playbacks)
+            ids = [item.id for item in self.playbacks.values()
+                   if kind is None or item.kind == kind]
         for playback_id in ids:
             self.stop(playback_id)
         return len(ids)
@@ -403,7 +444,9 @@ class Mixer(object):
             finished = []
             for playback in playbacks:
                 if playback.stop_event.is_set():
-                    finished.append(playback.id)
+                    finished.append((playback, False))
+                    continue
+                if playback.pause_event.is_set():
                     continue
                 try:
                     block = playback.blocks.get_nowait()
@@ -411,13 +454,19 @@ class Mixer(object):
                     inputs.append((playback.filter_lfe(block), playback.destination_indices))
                 except queue.Empty:
                     if playback.done_event.is_set():
-                        finished.append(playback.id)
+                        finished.append((playback, True))
                     elif playback.state == 'playing':
                         with self.lock:
                             self.decode_starvations += 1
 
-            for playback_id in finished:
-                self.stop(playback_id)
+            for playback, completed in finished:
+                if self.stop(playback.id) and completed:
+                    if playback.on_complete is not None:
+                        try:
+                            playback.on_complete(playback)
+                        except Exception as exc:
+                            with self.lock:
+                                self.last_error = 'Error al avanzar la lista OST: %s' % exc
 
             mix_started = time.time()
             mixed = mix_block(inputs)

@@ -2,8 +2,8 @@
 
 Aplicación web y API REST para reproducir MP3, OGG y WAV en los altavoces de un
 receptor 5.1 conectado por HDMI. Se arranca con Python 3; no necesita
-paquetes de Python externos. Permite cuatro sonidos simultáneos, incluso en el
-mismo altavoz.
+paquetes de Python externos. Permite cuatro efectos simultáneos, incluso en el
+mismo altavoz, más una pista de música OST.
 
 ## Preparación en la Raspberry Pi
 
@@ -33,9 +33,13 @@ python3 audio_server.py --device 'plughw:CARD=b2,DEV=0' --port 8080
 ```
 
 Abre `http://<ip-de-la-raspberry>:8080/` desde un dispositivo de la misma red.
-La web permite subir archivos de hasta 100 MB, seleccionarlos en una lista con
-desplazamiento, reproducirlos en un altavoz y detener sonidos activos. Los
-archivos se guardan en `audio/`, que se crea automáticamente. El servidor
+La web tiene dos pestañas. **Efectos de sonido** permite subir archivos de hasta
+100 MB y enviarlos a los altavoces. **OST** tiene una playlist de MP3 con
+anterior, reproducir, pausar, siguiente y modo aleatorio. La música avanza
+automáticamente al terminar cada pista y vuelve al principio de la lista. El
+modo aleatorio recorre las pistas antes de repetirlas. Los efectos se guardan
+en `audio/` y la música en `ost_audio/`, carpetas creadas automáticamente.
+Puedes cambiar las carpetas con `--data-dir` y `--ost-dir`. El servidor
 escucha en la red local sin clave; no lo expongas a Internet.
 
 ## API REST
@@ -76,6 +80,42 @@ curl -X DELETE http://<ip-de-la-raspberry>:8080/api/playbacks/ID_REPRODUCCION
 `DELETE /api/playbacks` detiene todas las reproducciones. La API devuelve JSON
 y usa `400` para solicitudes inválidas, `404` para archivos o reproducciones
 inexistentes y `409` cuando ya suenan cuatro archivos.
+
+### API OST
+
+`GET /api/ost` devuelve la playlist, la pista actual, el estado, los dos
+altavoces elegidos y el modo aleatorio. La playlist OST acepta sólo MP3 y se
+sube a una carpeta independiente:
+
+```bash
+curl -X POST --data-binary @musica.mp3 \
+  'http://<ip-de-la-raspberry>:8080/api/ost/upload?filename=musica.mp3'
+```
+
+Para reproducir la primera pista o reanudar la actual:
+
+```bash
+curl -X POST -H 'Content-Type: application/json' -d '{}' \
+  http://<ip-de-la-raspberry>:8080/api/ost/play
+```
+
+También puedes pasar `{"file_id":"ID_DEL_MP3"}` para elegir una pista. Los
+controles `POST /api/ost/pause`, `POST /api/ost/previous`,
+`POST /api/ost/next` y `POST /api/ost/stop` no necesitan cuerpo. El modo
+aleatorio se activa con `POST /api/ost/shuffle` y cuerpo
+`{"shuffle":true}`; usa `false` para desactivarlo.
+
+Para dirigir los canales izquierdo y derecho a dos altavoces distintos:
+
+```bash
+curl -X POST http://<ip-de-la-raspberry>:8080/api/ost/channels \
+  -H 'Content-Type: application/json' \
+  -d '{"channels":["front_left","rear_left"]}'
+```
+
+El cambio de altavoces durante una canción la reinicia desde el principio.
+Los efectos y la OST pueden sonar a la vez. `DELETE /api/playbacks` detiene
+sólo los efectos; `POST /api/ost/stop` detiene sólo la música.
 
 ## Comprobaciones
 

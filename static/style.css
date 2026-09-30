@@ -18,6 +18,7 @@ body {
               #0b0e14;
 }
 button, input { font: inherit; }
+[hidden] { display: none !important; }
 button { cursor: pointer; }
 button:focus-visible, .upload-button:focus-within, .file-row:focus-within {
   outline: 2px solid var(--teal);
@@ -173,8 +174,41 @@ p { margin: 0; color: var(--muted); line-height: 1.5; }
 .empty { color: #98a3b0; padding: 20px 14px; font-size: .85rem; }
 .message:not(:empty) { margin: 0 0 19px; padding: 12px 16px; border: 1px solid #5d725d; border-radius: 11px; background: #23362f; color: #d9f5e6; font-size: .85rem; }
 .message.error:not(:empty) { border-color: #925d61; background: #4a292f; color: #ffe5e7; }
+.tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #37404b; }
+.tab-button { border: 0; border-bottom: 3px solid transparent; background: transparent; color: #a6b4bd; padding: 13px 20px; font-weight: 700; font-size: .89rem; }
+.tab-button:hover { color: #f1f3f7; }
+.tab-button.is-active { border-color: var(--teal); color: var(--teal); }
+.ost-grid { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 20px; align-items: start; }
+.ost-library h2 { display: flex; align-items: center; gap: 10px; }
+.ost-upload { margin: 24px 0 15px; }
+.ost-playlist { max-height: 510px; min-height: 180px; overflow-y: auto; padding: 4px; border: 1px solid #303946; border-radius: 12px; background: #121720; scrollbar-color: #4e5968 #151a22; }
+.ost-track { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 12px; border: 0; border-radius: 8px; background: transparent; color: #dce7e7; text-align: left; }
+.ost-track + .ost-track { margin-top: 2px; }
+.ost-track:hover { background: #26343c; }
+.ost-track.is-current { background: #30433e; box-shadow: inset 0 0 0 1px #698778; }
+.ost-track-number { flex: none; width: 25px; color: var(--accent); font-size: .7rem; font-weight: 800; }
+.ost-track-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: .85rem; font-weight: 650; }
+.ost-track-icon { color: var(--teal); font-size: .9rem; }
+.ost-now-label { margin: 26px 0 8px; color: var(--accent); font-size: .66rem; font-weight: 800; letter-spacing: .16em; }
+.ost-player > h2 { min-height: 2.5em; overflow-wrap: anywhere; font-size: 1.7rem; }
+.ost-state { margin-top: 8px; color: #a9bcb9; font-size: .85rem; }
+.ost-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; margin: 30px 0 32px; }
+.ost-controls button { display: grid; place-items: center; width: 51px; height: 51px; border: 1px solid #5c6d72; border-radius: 14px; background: #263940; color: #e5f4f3; font-size: 1.12rem; }
+.ost-controls button:hover:not(:disabled), .ost-controls button.is-active { border-color: var(--teal); background: #33514e; color: var(--teal); }
+.ost-controls button:disabled { opacity: .4; cursor: not-allowed; }
+.ost-controls .ost-primary { width: 63px; height: 63px; border-color: #89c9b8; border-radius: 18px; background: #9cdbc7; color: #162724; font-size: 1.4rem; }
+.ost-controls .ost-primary:hover:not(:disabled) { background: #b7efdc; color: #162724; }
+.ost-routing { padding: 19px; border: 1px solid #3f5554; border-radius: 14px; background: #1b2a2d; }
+.ost-routing h3 { margin: 0 0 5px; font-size: 1rem; }
+.ost-routing > p { font-size: .8rem; }
+.ost-selectors { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 17px; }
+.ost-selectors label { display: grid; gap: 7px; color: #dce6e3; font-size: .76rem; font-weight: 750; }
+.ost-selectors select { width: 100%; min-width: 0; padding: 10px 11px; border: 1px solid #60716c; border-radius: 8px; background: #101c20; color: #e5f1ee; font: inherit; }
+.ost-selectors select:focus-visible, .tab-button:focus-visible, .ost-track:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.ost-routing .ost-routing-note { margin-top: 13px; color: #a8b6ad; font-size: .73rem; }
 @media (max-width: 900px) {
   .workspace { grid-template-columns: 1fr; }
+  .ost-grid { grid-template-columns: 1fr; }
   .library-panel { position: static; }
   .file-list { max-height: 265px; }
 }
@@ -198,4 +232,6 @@ p { margin: 0; color: var(--muted); line-height: 1.5; }
   .listener-core { font-size: .62rem; }
   .room-front, .room-rear { font-size: .55rem; }
   .playback-heading { align-items: flex-end; }
+  .tab-button { flex: 1; padding: 12px 7px; font-size: .78rem; }
+  .ost-selectors { grid-template-columns: 1fr; }
 }

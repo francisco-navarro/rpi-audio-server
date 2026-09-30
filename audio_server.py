@@ -21,6 +21,7 @@ except ImportError:  # Python 3
     string_types = (str,)
 
 from mixer import Mixer
+from ost import OSTController
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -36,8 +37,9 @@ def to_text(value):
 
 
 class FileStore(object):
-    def __init__(self, directory):
+    def __init__(self, directory, extensions=EXTENSIONS):
         self.directory = os.path.abspath(directory)
+        self.extensions = frozenset(extensions)
         self.index_path = os.path.join(self.directory, 'index.json')
         self.lock = threading.RLock()
         if not os.path.isdir(self.directory):
@@ -68,8 +70,8 @@ class FileStore(object):
     def save_upload(self, name, source, length):
         name = to_text(name).replace('\\', '/').split('/')[-1].strip()
         extension = os.path.splitext(name)[1].lower()
-        if not name or len(name) > 255 or extension not in EXTENSIONS:
-            raise ValueError('Use a .mp3, .ogg or .wav filename')
+        if not name or len(name) > 255 or extension not in self.extensions:
+            raise ValueError('Use a %s filename' % ', '.join(sorted(self.extensions)))
         if length <= 0 or length > MAX_UPLOAD_BYTES:
             raise ValueError('File must be between 1 byte and 100 MB')
 
@@ -110,10 +112,12 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, handler, files, mixer):
+    def __init__(self, address, handler, files, mixer, ost_files, ost):
         HTTPServer.__init__(self, address, handler)
         self.files = files
         self.mixer = mixer
+        self.ost_files = ost_files
+        self.ost = ost
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -175,7 +179,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/files':
             return self._json(200, {'files': self.server.files.list_files()})
         if path == '/api/playbacks':
-            return self._json(200, {'playbacks': self.server.mixer.list_playbacks()})
+            return self._json(200, {'playbacks': self.server.mixer.list_playbacks('effect')})
+        if path == '/api/ost':
+            return self._json(200, self.server.ost.describe())
         if path == '/api/health':
             return self._json(200, self.server.mixer.health())
         static = {
@@ -193,14 +199,16 @@ class Handler(BaseHTTPRequestHandler):
         if not self._same_origin():
             return self._error(403, 'Origin is not allowed')
         parsed = urlsplit(self.path)
-        if parsed.path == '/upload':
+        if parsed.path in ('/upload', '/api/ost/upload'):
             try:
                 length = self._content_length(MAX_UPLOAD_BYTES)
                 values = parse_qs(parsed.query)
                 name = values.get('filename', [''])[0]
                 if not name:
                     raise ValueError('filename query parameter is required')
-                uploaded = self.server.files.save_upload(name, self.rfile, length)
+                store = (self.server.ost_files if parsed.path == '/api/ost/upload'
+                         else self.server.files)
+                uploaded = store.save_upload(name, self.rfile, length)
                 return self._json(201, uploaded)
             except OverflowError as exc:
                 return self._error(413, str(exc))
@@ -234,6 +242,36 @@ class Handler(BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 return self._error(503, str(exc))
 
+        ost_actions = {
+            '/api/ost/play': 'play',
+            '/api/ost/pause': 'pause',
+            '/api/ost/stop': 'stop',
+            '/api/ost/next': 'next',
+            '/api/ost/previous': 'previous',
+        }
+        if parsed.path in ost_actions or parsed.path in ('/api/ost/shuffle',
+                                                          '/api/ost/channels'):
+            try:
+                if parsed.path == '/api/ost/play':
+                    payload = self._read_json()
+                    file_id = payload.get('file_id')
+                    if file_id is not None and not isinstance(file_id, string_types):
+                        raise ValueError('file_id must be a string')
+                    result = self.server.ost.play(file_id)
+                elif parsed.path == '/api/ost/shuffle':
+                    result = self.server.ost.set_shuffle(self._read_json().get('shuffle'))
+                elif parsed.path == '/api/ost/channels':
+                    result = self.server.ost.set_channels(self._read_json().get('channels'))
+                else:
+                    result = getattr(self.server.ost, ost_actions[parsed.path])()
+                return self._json(200, result)
+            except OverflowError as exc:
+                return self._error(409, str(exc))
+            except (ValueError, UnicodeDecodeError, TypeError) as exc:
+                return self._error(400, str(exc))
+            except RuntimeError as exc:
+                return self._error(503, str(exc))
+
         return self._error(404, 'Not found')
 
     def do_DELETE(self):
@@ -241,12 +279,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, 'Origin is not allowed')
         path = urlsplit(self.path).path
         if path == '/api/playbacks':
-            count = self.server.mixer.stop_all()
+            count = self.server.mixer.stop_all('effect')
             return self._json(200, {'stopped': count})
         prefix = '/api/playbacks/'
         if path.startswith(prefix):
             playback_id = path[len(prefix):]
-            if self.server.mixer.stop(playback_id):
+            if self.server.mixer.stop(playback_id, 'effect'):
                 return self._json(200, {'stopped': playback_id})
             return self._error(404, 'Playback not found')
         return self._error(404, 'Not found')
@@ -258,6 +296,7 @@ def main(argv=None):
     parser.add_option('--port', type='int', default=8080)
     parser.add_option('--device', default='plughw:CARD=b2,DEV=0')
     parser.add_option('--data-dir', default=os.path.join(ROOT, 'audio'))
+    parser.add_option('--ost-dir', default=os.path.join(ROOT, 'ost_audio'))
     parser.add_option('--debug-audio', action='store_true', default=False,
                       help='Show ALSA and FFmpeg output in the terminal')
     args, extras = parser.parse_args(argv)
@@ -265,8 +304,11 @@ def main(argv=None):
         parser.error('Unexpected arguments: %s' % ' '.join(extras))
 
     files = FileStore(args.data_dir)
+    ost_files = FileStore(args.ost_dir, ('.mp3',))
     mixer = Mixer(args.device, debug_audio=args.debug_audio)
-    server = ThreadedHTTPServer((args.host, args.port), Handler, files, mixer)
+    ost = OSTController(ost_files, mixer)
+    server = ThreadedHTTPServer((args.host, args.port), Handler, files, mixer,
+                                ost_files, ost)
     print('Open http://<raspberry-pi-ip>:%d/ on your local network' % args.port)
     try:
         server.serve_forever()

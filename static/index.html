@@ -21,6 +21,12 @@
 
     <div id="message" class="message" role="status" aria-live="polite"></div>
 
+    <div class="tabs" role="tablist" aria-label="Modo de audio">
+      <button id="effects-tab" class="tab-button is-active" type="button" role="tab" aria-selected="true" aria-controls="effects-panel">Efectos de sonido</button>
+      <button id="ost-tab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="ost-panel">OST · Música</button>
+    </div>
+
+    <div id="effects-panel" role="tabpanel" aria-labelledby="effects-tab">
     <div class="workspace">
       <section class="panel library-panel" aria-labelledby="library-title">
         <div class="section-heading">
@@ -101,6 +107,49 @@
         </section>
       </div>
     </div>
+    </div>
+
+    <section id="ost-panel" class="ost-panel" role="tabpanel" aria-labelledby="ost-tab" hidden>
+      <div class="ost-grid">
+        <div class="panel ost-library">
+          <span class="section-number">01 / BANDA SONORA</span>
+          <h2>Playlist OST <span id="ost-count" class="active-count">0 pistas</span></h2>
+          <p>La música avanza automáticamente al siguiente MP3.</p>
+          <label class="upload-button ost-upload">
+            <span class="upload-plus" aria-hidden="true">+</span>
+            <span>Subir MP3 <small>Carpeta OST independiente · máx. 100 MB</small></span>
+            <input id="ost-upload" type="file" accept=".mp3,audio/mpeg">
+          </label>
+          <div id="ost-playlist" class="ost-playlist" aria-label="Lista de reproducción OST"></div>
+        </div>
+        <div class="panel ost-player">
+          <span class="section-number">02 / REPRODUCTOR</span>
+          <p class="ost-now-label">SONANDO AHORA</p>
+          <h2 id="ost-current">Selecciona una pista</h2>
+          <p id="ost-state" class="ost-state">La playlist está detenida.</p>
+          <div class="ost-controls" aria-label="Controles de música">
+            <button id="ost-previous" type="button" aria-label="Pista anterior" title="Pista anterior">⏮</button>
+            <button id="ost-play" class="ost-primary" type="button" aria-label="Reproducir" title="Reproducir">▶</button>
+            <button id="ost-pause" type="button" aria-label="Pausar" title="Pausar">⏸</button>
+            <button id="ost-next" type="button" aria-label="Pista siguiente" title="Pista siguiente">⏭</button>
+            <button id="ost-shuffle" type="button" aria-pressed="false" aria-label="Activar modo aleatorio" title="Modo aleatorio">🔀</button>
+          </div>
+          <div class="ost-routing">
+            <h3>Salida estéreo</h3>
+            <p>El canal izquierdo y el derecho pueden sonar en dos altavoces distintos.</p>
+            <div class="ost-selectors">
+              <label>Izquierdo
+                <select id="ost-left"></select>
+              </label>
+              <label>Derecho
+                <select id="ost-right"></select>
+              </label>
+            </div>
+            <p class="ost-routing-note">Si cambias los altavoces durante una canción, esta empieza de nuevo.</p>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 </body>
 </html>
