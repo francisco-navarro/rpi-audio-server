@@ -178,7 +178,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result, audio_server.REBOOT_EXIT_CODE)
         self.assertEqual(events, ['server', 'mixer'])
 
-    def request(self, path, method='GET', body=None, origin=None):
+    def request(self, path, method='GET', body=None, origin=None, private_network=False):
         handler = Handler.__new__(Handler)
         handler.path = path
         handler.rfile = BytesIO(body if body is not None else b'')
@@ -186,6 +186,8 @@ class ServerTests(unittest.TestCase):
         handler.headers = {'Host': '127.0.0.1:8080'}
         if origin is not None:
             handler.headers['Origin'] = origin
+        if private_network:
+            handler.headers['Access-Control-Request-Private-Network'] = 'true'
         if body is not None:
             handler.headers['Content-Length'] = str(len(body))
         handler.server = type('Server', (object,), {})()
@@ -212,6 +214,10 @@ class ServerTests(unittest.TestCase):
 
     def test_mansiones_origin_can_upload_and_play_with_cors(self):
         origin = 'http://mansiones.local'
+        self.assertEqual(self.request('/api/health', 'OPTIONS', origin=origin, private_network=True)[0], 204)
+        self.assertEqual(self.last_headers['Access-Control-Allow-Private-Network'], 'true')
+        self.assertEqual(self.request('/api/health', origin=origin)[0], 200)
+        self.assertEqual(self.last_headers['Access-Control-Allow-Origin'], origin)
         self.assertEqual(self.request('/api/play', 'OPTIONS', origin=origin)[0], 204)
         self.assertEqual(self.last_headers['Access-Control-Allow-Origin'], origin)
         self.assertIn('Content-Type', self.last_headers['Access-Control-Allow-Headers'])

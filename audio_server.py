@@ -210,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         if not self._same_origin():
             return self._error(403, 'Origin is not allowed')
-        if urlsplit(self.path).path not in ('/upload', '/api/files', '/api/play'):
+        if urlsplit(self.path).path not in ('/upload', '/api/files', '/api/play', '/api/health'):
             return self._error(404, 'Not found')
         self.send_response(204)
         self._cors_headers()
