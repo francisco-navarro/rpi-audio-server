@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 import json
 import os
+import signal
 import sys
 import threading
 import uuid
@@ -28,6 +29,11 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 EXTENSIONS = frozenset(('.mp3', '.ogg', '.wav'))
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_JSON_BYTES = 8192
+DEFAULT_ALLOWED_ORIGINS = (
+    'http://mansiones.local',
+    'http://mansiones.local:5173',
+    'http://localhost:5173',
+)
 
 
 def to_text(value):
@@ -112,12 +118,14 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, handler, files, mixer, ost_files, ost):
+    def __init__(self, address, handler, files, mixer, ost_files, ost,
+                 allowed_origins=DEFAULT_ALLOWED_ORIGINS):
         HTTPServer.__init__(self, address, handler)
         self.files = files
         self.mixer = mixer
         self.ost_files = ost_files
         self.ost = ost
+        self.allowed_origins = frozenset(allowed_origins)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -129,6 +137,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, status, body, content_type='application/json; charset=utf-8'):
         self.send_response(status)
+        self._cors_headers()
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
@@ -148,7 +157,28 @@ class Handler(BaseHTTPRequestHandler):
         if not origin:
             return True  # REST clients need not send Origin.
         parsed = urlsplit(origin)
-        return parsed.netloc == self.headers.get('Host') and parsed.scheme in ('http', 'https')
+        return ((parsed.netloc == self.headers.get('Host') and parsed.scheme in ('http', 'https'))
+                or origin in self.server.allowed_origins)
+
+    def _cors_headers(self):
+        origin = self.headers.get('Origin')
+        if origin and self._same_origin():
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
+
+    def do_OPTIONS(self):
+        if not self._same_origin():
+            return self._error(403, 'Origin is not allowed')
+        if urlsplit(self.path).path not in ('/upload', '/api/files', '/api/play'):
+            return self._error(404, 'Not found')
+        self.send_response(204)
+        self._cors_headers()
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        if self.headers.get('Access-Control-Request-Private-Network') == 'true':
+            self.send_header('Access-Control-Allow-Private-Network', 'true')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
 
     def _content_length(self, maximum):
         value = self.headers.get('Content-Length')
@@ -297,26 +327,40 @@ def main(argv=None):
     parser.add_option('--device', default='plughw:CARD=b2,DEV=0')
     parser.add_option('--data-dir', default=os.path.join(ROOT, 'audio'))
     parser.add_option('--ost-dir', default=os.path.join(ROOT, 'ost_audio'))
+    parser.add_option('--allow-origin', action='append', dest='allowed_origins',
+                      default=[], help='Additional web origin allowed to use the API')
     parser.add_option('--debug-audio', action='store_true', default=False,
                       help='Show ALSA and FFmpeg output in the terminal')
     args, extras = parser.parse_args(argv)
     if extras:
         parser.error('Unexpected arguments: %s' % ' '.join(extras))
+    for origin in args.allowed_origins:
+        parsed = urlsplit(origin)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.path or parsed.query or parsed.fragment:
+            parser.error('--allow-origin must be an exact http(s) origin')
 
     files = FileStore(args.data_dir)
     ost_files = FileStore(args.ost_dir, ('.mp3',))
     mixer = Mixer(args.device, debug_audio=args.debug_audio)
     ost = OSTController(ost_files, mixer)
     server = ThreadedHTTPServer((args.host, args.port), Handler, files, mixer,
-                                ost_files, ost)
+                                ost_files, ost,
+                                DEFAULT_ALLOWED_ORIGINS + tuple(args.allowed_origins))
+    def stop_server(_signum, _frame):
+        raise KeyboardInterrupt()
+
+    old_sigterm = signal.signal(signal.SIGTERM, stop_server)
     print('Open http://<raspberry-pi-ip>:%d/ on your local network' % args.port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
-        mixer.close()
+        signal.signal(signal.SIGTERM, old_sigterm)
+        try:
+            server.server_close()
+        finally:
+            mixer.close()
 
 
 if __name__ == '__main__':

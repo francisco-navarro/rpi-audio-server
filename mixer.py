@@ -112,6 +112,7 @@ class Playback(object):
         self.state = 'paused' if paused else 'loading'
         self.error = None
         self.lfe_level = 0.0
+        self.frames_played = 0
 
     def describe(self):
         return {
@@ -156,6 +157,7 @@ class Mixer(object):
         self.aplay = aplay
         self.debug_audio = debug_audio
         self.lock = threading.RLock()
+        self.sink_lock = threading.RLock()
         self.wake = threading.Event()
         self.closed = threading.Event()
         self.playbacks = {}
@@ -210,6 +212,13 @@ class Mixer(object):
     def has_playback(self, playback_id):
         with self.lock:
             return playback_id in self.playbacks
+
+    def position_seconds(self, playback_id):
+        with self.lock:
+            playback = self.playbacks.get(playback_id)
+            if playback is None:
+                return None
+            return float(playback.frames_played) / RATE
 
     def pause(self, playback_id):
         with self.lock:
@@ -297,10 +306,23 @@ class Mixer(object):
 
     def close(self):
         self.closed.set()
+        with self.lock:
+            active = list(self.playbacks.values())
         self.stop_all()
         self.wake.set()
+        # Closing the ALSA child unblocks a mixer thread stuck in pipe writes.
+        self._close_sink(force=True)
         self.thread.join(2)
-        self._close_sink()
+        for playback in active:
+            if not playback.done_event.wait(0.2):
+                process = playback.process
+                if process is not None and process.poll() is None:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                playback.done_event.wait(0.5)
+        self._close_sink(force=True)
 
     def _decode(self, playback):
         command = [self.ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'info',
@@ -312,10 +334,17 @@ class Mixer(object):
         reader = None
         lines = deque(maxlen=80)
         try:
+            if playback.stop_event.is_set():
+                return
             null = open(os.devnull, 'wb')
             process = subprocess.Popen(command, stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE, stdin=null)
             playback.process = process
+            if playback.stop_event.is_set() and process.poll() is None:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
             self._log('FFmpeg', '[%s] Iniciando decodificación: %s' %
                       (playback.id[:8], playback.path))
             reader = threading.Thread(target=self._collect_output,
@@ -361,6 +390,10 @@ class Mixer(object):
                 reader.join(1)
 
     def _open_sink(self):
+        with self.sink_lock:
+            return self._open_sink_locked()
+
+    def _open_sink_locked(self):
         if self.sink is not None:
             if self.sink.poll() is None:
                 return True
@@ -381,7 +414,7 @@ class Mixer(object):
             self._log('ALSA', 'Iniciando aplay con dispositivo %s' % self.device)
             self.sink = subprocess.Popen(command, stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT)
+                                         stderr=subprocess.STDOUT, bufsize=0)
             self.sink_reader = threading.Thread(target=self._collect_output,
                                                 args=(self.sink.stdout, 'ALSA'))
             self.sink_reader.daemon = True
@@ -392,31 +425,57 @@ class Mixer(object):
             self._log('ALSA', self.last_error)
             return False
 
-    def _close_sink(self):
+    def _close_sink(self, force=False):
+        with self.sink_lock:
+            self._close_sink_locked(force)
+
+    def _close_sink_locked(self, force=False):
         sink = self.sink
         reader = self.sink_reader
         self.sink = None
         self.sink_reader = None
         if sink is None:
             return
+        if force and sink.poll() is None:
+            try:
+                sink.terminate()
+            except OSError:
+                pass
         try:
             if sink.stdin:
                 sink.stdin.close()
-        except IOError:
+        except (IOError, OSError, ValueError):
             pass
-        # Let aplay drain its ALSA buffer. Terminating it immediately can
-        # discard an entire short effect before the receiver plays it.
-        if sink.poll() is None:
+        # Let aplay drain its ALSA buffer after a natural end. Shutdown uses
+        # force=True so the HDMI device is released without waiting on ALSA.
+        if sink.poll() is None and not force:
             deadline = time.time() + 2.0
             while sink.poll() is None and time.time() < deadline:
                 time.sleep(0.02)
             if sink.poll() is None:
-                sink.terminate()
+                try:
+                    sink.terminate()
+                except OSError:
+                    pass
         return_code = None
-        try:
-            return_code = sink.wait()
-        except OSError:
-            pass
+        deadline = time.time() + 0.5
+        while sink.poll() is None and time.time() < deadline:
+            time.sleep(0.02)
+        if sink.poll() is None:
+            try:
+                sink.kill()
+            except OSError:
+                pass
+            deadline = time.time() + 0.5
+            while sink.poll() is None and time.time() < deadline:
+                time.sleep(0.02)
+        if sink.poll() is not None:
+            try:
+                return_code = sink.wait()
+            except OSError:
+                pass
+        else:
+            self.last_error = 'aplay no terminó tras SIGKILL; comprueba el proceso y el dispositivo ALSA.'
         if reader is not None:
             reader.join(1)
         if return_code and return_code > 0 and self.last_error is None:
@@ -441,6 +500,7 @@ class Mixer(object):
                 continue
 
             inputs = []
+            played = []
             finished = []
             for playback in playbacks:
                 if playback.stop_event.is_set():
@@ -452,6 +512,7 @@ class Mixer(object):
                     block = playback.blocks.get_nowait()
                     playback.state = 'playing'
                     inputs.append((playback.filter_lfe(block), playback.destination_indices))
+                    played.append(playback)
                 except queue.Empty:
                     if playback.done_event.is_set():
                         finished.append((playback, True))
@@ -476,19 +537,26 @@ class Mixer(object):
                 self.max_mix_ms = max(self.max_mix_ms, mix_ms)
             try:
                 write_started = time.time()
-                self.sink.stdin.write(mixed)
-                self.sink.stdin.flush()
+                sink = self.sink
+                if sink is None:
+                    continue
+                sink.stdin.write(mixed)
+                sink.stdin.flush()
                 write_ms = (time.time() - write_started) * 1000
                 with self.lock:
                     self.last_write_ms = write_ms
                     self.max_write_ms = max(self.max_write_ms, write_ms)
+                    for playback in played:
+                        playback.frames_played += FRAMES_PER_BLOCK
                 if inputs:
                     peak = max(abs(sample) for sample in _samples(mixed))
                     if peak:
                         with self.lock:
                             self.last_signal_peak = peak
                             self.last_signal_at = time.time()
-            except (OSError, IOError) as exc:
+            except (OSError, IOError, ValueError) as exc:
+                if self.closed.is_set():
+                    break
                 self._close_sink()
                 with self.lock:
                     detail = self.alsa_log[-1] if self.alsa_log else ''

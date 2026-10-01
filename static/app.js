@@ -14,12 +14,22 @@ const audioStatusElement = document.getElementById('audio-status');
 const alsaLogElement = document.getElementById('alsa-log');
 const ffmpegLogElement = document.getElementById('ffmpeg-log');
 const audioMetricsElement = document.getElementById('audio-metrics');
+const audioTracesElement = document.querySelector('.audio-traces');
+const effectsPanelElement = document.getElementById('effects-panel');
 let files = [];
 let selectedId = null;
 let lastAudioError = null;
 let ost = null;
+let ostUpdatedAt = 0;
+let ostEndTimer = null;
+let healthInFlight = false;
+let healthTimer = null;
 
 const ostPlaylistElement = document.getElementById('ost-playlist');
+const ostPanelElement = document.getElementById('ost-panel');
+const ostProgressElement = document.getElementById('ost-progress');
+const ostElapsedElement = document.getElementById('ost-elapsed');
+const ostDurationElement = document.getElementById('ost-duration');
 const ostLeftElement = document.getElementById('ost-left');
 const ostRightElement = document.getElementById('ost-right');
 
@@ -40,6 +50,8 @@ for (const tab of document.querySelectorAll('.tab-button')) {
       other.setAttribute('aria-selected', String(active));
       document.getElementById(other.getAttribute('aria-controls')).hidden = !active;
     }
+    refreshActiveTab();
+    if (!effectsPanelElement.hidden && audioTracesElement.open) refreshHealth();
   });
 }
 
@@ -184,6 +196,7 @@ for (const button of document.querySelectorAll('[data-channel]')) {
       });
       message(`Reproduciendo en ${names[button.dataset.channel]}.`);
       await refreshPlaybacks();
+      scheduleHealth();
     } catch (error) { message(error.message, true); }
   });
 }
@@ -241,20 +254,72 @@ function renderOST() {
     row.addEventListener('click', () => postOST('/api/ost/play', {file_id: track.id}));
     ostPlaylistElement.appendChild(row);
   }
+  updateOSTProgress();
+}
+
+function formatTime(value) {
+  const seconds = Math.max(0, Math.floor(value));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = String(seconds % 60).padStart(2, '0');
+  return minutes >= 60
+    ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${remainder}`
+    : `${minutes}:${remainder}`;
+}
+
+function updateOSTProgress() {
+  if (!ost) return;
+  const duration = Number(ost.duration_seconds);
+  const knownDuration = Number.isFinite(duration) && duration > 0;
+  const base = Number(ost.position_seconds) || 0;
+  const elapsed = ost.state === 'playing'
+    ? Math.max(0, (performance.now() - ostUpdatedAt) / 1000) : 0;
+  const position = knownDuration
+    ? Math.min(duration, base + elapsed) : base + elapsed;
+  if (knownDuration) {
+    ostProgressElement.max = duration;
+    ostProgressElement.value = position;
+  } else if (ost.current) {
+    ostProgressElement.removeAttribute('value');
+  } else {
+    ostProgressElement.max = 1;
+    ostProgressElement.value = 0;
+  }
+  ostElapsedElement.textContent = formatTime(position);
+  ostDurationElement.textContent = knownDuration ? formatTime(duration) : '--:--';
+  ostProgressElement.setAttribute('aria-valuetext',
+    `${ostElapsedElement.textContent} de ${ostDurationElement.textContent}`);
+}
+
+function applyOST(state) {
+  ost = state;
+  ostUpdatedAt = performance.now();
+  clearTimeout(ostEndTimer);
+  renderOST();
+  const remaining = Number(ost.duration_seconds) - Number(ost.position_seconds);
+  if (ost.state === 'playing' && Number.isFinite(remaining) && remaining > 0.3) {
+    ostEndTimer = setTimeout(() => {
+      if (!document.hidden && !ostPanelElement.hidden) {
+        refreshOST().catch(error => message(error.message, true));
+      }
+    }, (remaining + 0.4) * 1000);
+  }
 }
 
 async function refreshOST() {
-  ost = await request('/api/ost');
-  renderOST();
+  applyOST(await request('/api/ost'));
 }
 
 async function postOST(path, payload) {
   try {
-    ost = await request(path, {
+    const state = await request(path, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload || {})
     });
-    renderOST();
+    applyOST(state);
+    if (path === '/api/ost/play' || path === '/api/ost/next' ||
+        path === '/api/ost/previous' || path === '/api/ost/channels') {
+      scheduleHealth();
+    }
   } catch (error) {
     message(error.message, true);
     await refreshOST();
@@ -300,10 +365,10 @@ for (const select of [ostLeftElement, ostRightElement]) {
   });
 }
 
-async function refresh() {
+async function refreshHealth() {
+  if (healthInFlight) return;
+  healthInFlight = true;
   try {
-    await refreshPlaybacks();
-    await refreshOST();
     const health = await request('/api/health');
     alsaLogElement.textContent = health.alsa_log?.join('\n') || 'Sin actividad todavía.';
     ffmpegLogElement.textContent = health.ffmpeg_log?.join('\n') || 'Sin actividad todavía.';
@@ -321,7 +386,40 @@ async function refresh() {
     }
     lastAudioError = health.last_error;
   } catch (error) { message(error.message, true); }
+  finally { healthInFlight = false; }
 }
 
-refreshFiles().then(refresh).catch(error => message(error.message, true));
-setInterval(refresh, 1500);
+function scheduleHealth() {
+  clearTimeout(healthTimer);
+  healthTimer = setTimeout(() => {
+    if (!document.hidden) refreshHealth();
+  }, 1200);
+}
+
+function refreshActiveTab() {
+  const update = effectsPanelElement.hidden ? refreshOST() : refreshPlaybacks();
+  update.catch(error => message(error.message, true));
+}
+
+audioTracesElement.addEventListener('toggle', () => {
+  if (audioTracesElement.open && !effectsPanelElement.hidden) refreshHealth();
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    refreshActiveTab();
+    if (audioTracesElement.open && !effectsPanelElement.hidden) refreshHealth();
+  }
+});
+
+refreshFiles()
+  .then(() => Promise.all([refreshPlaybacks(), refreshOST(), refreshHealth()]))
+  .catch(error => message(error.message, true));
+setInterval(() => { if (!document.hidden) refreshActiveTab(); }, 3000);
+setInterval(() => {
+  if (!document.hidden && !effectsPanelElement.hidden && audioTracesElement.open) {
+    refreshHealth();
+  }
+}, 5000);
+setInterval(() => {
+  if (!document.hidden && !ostPanelElement.hidden) updateOSTProgress();
+}, 200);

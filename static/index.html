@@ -127,6 +127,10 @@
           <p class="ost-now-label">SONANDO AHORA</p>
           <h2 id="ost-current">Selecciona una pista</h2>
           <p id="ost-state" class="ost-state">La playlist está detenida.</p>
+          <div class="ost-progress-block">
+            <progress id="ost-progress" max="1" value="0" aria-label="Progreso de la canción"></progress>
+            <div class="ost-times"><span id="ost-elapsed">0:00</span><span id="ost-duration">0:00</span></div>
+          </div>
           <div class="ost-controls" aria-label="Controles de música">
             <button id="ost-previous" type="button" aria-label="Pista anterior" title="Pista anterior">⏮</button>
             <button id="ost-play" class="ost-primary" type="button" aria-label="Reproducir" title="Reproducir">▶</button>

@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 import json
 import os
+import signal
 import shutil
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import unittest
 from io import BytesIO
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import audio_server
 from audio_server import FileStore, Handler
 from ost import OSTController
 
@@ -42,6 +44,10 @@ class FakeMixer(object):
 
     def has_playback(self, playback_id):
         return playback_id in self.playbacks
+
+    def position_seconds(self, playback_id):
+        playback = self.playbacks.get(playback_id)
+        return playback.get('position', 0.0) if playback else None
 
     def stop(self, playback_id, kind=None):
         item = self.playbacks.get(playback_id)
@@ -85,17 +91,51 @@ class ServerTests(unittest.TestCase):
         self.files = FileStore(os.path.join(self.temp, 'effects'))
         self.ost_files = FileStore(os.path.join(self.temp, 'ost'), ('.mp3',))
         self.mixer = FakeMixer()
-        self.ost = OSTController(self.ost_files, self.mixer)
+        self.ost = OSTController(self.ost_files, self.mixer, ffprobe=None)
 
     def tearDown(self):
         shutil.rmtree(self.temp)
 
-    def request(self, path, method='GET', body=None):
+    def test_sigterm_closes_server_and_mixer(self):
+        closed = []
+
+        class FakeMixer(object):
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def close(self):
+                closed.append('mixer')
+
+        class FakeServer(object):
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def serve_forever(self):
+                signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+
+            def server_close(self):
+                closed.append('server')
+
+        old_mixer = audio_server.Mixer
+        old_server = audio_server.ThreadedHTTPServer
+        try:
+            audio_server.Mixer = FakeMixer
+            audio_server.ThreadedHTTPServer = FakeServer
+            audio_server.main(['--data-dir', os.path.join(self.temp, 'main-effects'),
+                               '--ost-dir', os.path.join(self.temp, 'main-ost')])
+        finally:
+            audio_server.Mixer = old_mixer
+            audio_server.ThreadedHTTPServer = old_server
+        self.assertEqual(closed, ['server', 'mixer'])
+
+    def request(self, path, method='GET', body=None, origin=None):
         handler = Handler.__new__(Handler)
         handler.path = path
         handler.rfile = BytesIO(body if body is not None else b'')
         handler.wfile = BytesIO()
         handler.headers = {'Host': '127.0.0.1:8080'}
+        if origin is not None:
+            handler.headers['Origin'] = origin
         if body is not None:
             handler.headers['Content-Length'] = str(len(body))
         handler.server = type('Server', (object,), {})()
@@ -103,13 +143,37 @@ class ServerTests(unittest.TestCase):
         handler.server.ost_files = self.ost_files
         handler.server.mixer = self.mixer
         handler.server.ost = self.ost
+        handler.server.allowed_origins = frozenset(('http://mansiones.local',))
         status = []
+        self.last_headers = {}
         handler.send_response = lambda code: status.append(code)
-        handler.send_header = lambda name, value: None
+        handler.send_header = lambda name, value: self.last_headers.__setitem__(name, value)
         handler.end_headers = lambda: None
         {'GET': handler.do_GET, 'POST': handler.do_POST,
-         'DELETE': handler.do_DELETE}[method]()
-        return status[0], json.loads(handler.wfile.getvalue().decode('utf-8'))
+         'DELETE': handler.do_DELETE, 'OPTIONS': handler.do_OPTIONS}[method]()
+        raw = handler.wfile.getvalue()
+        return status[0], json.loads(raw.decode('utf-8')) if raw else {}
+
+    def test_mansiones_origin_can_upload_and_play_with_cors(self):
+        origin = 'http://mansiones.local'
+        self.assertEqual(self.request('/api/play', 'OPTIONS', origin=origin)[0], 204)
+        self.assertEqual(self.last_headers['Access-Control-Allow-Origin'], origin)
+        self.assertIn('Content-Type', self.last_headers['Access-Control-Allow-Headers'])
+        code, uploaded = self.request('/upload?filename=mythos.ogg', 'POST', b'ogg', origin)
+        self.assertEqual(code, 201)
+        self.assertEqual(self.last_headers['Access-Control-Allow-Origin'], origin)
+        body = json.dumps({'file_id': uploaded['id'], 'channel': 'lfe'}).encode('utf-8')
+        code, playback = self.request('/api/play', 'POST', body, origin)
+        self.assertEqual(code, 201)
+        self.assertEqual(playback['channels'], ['lfe'])
+        self.assertEqual(self.request('/api/files', origin=origin)[0], 200)
+        self.assertEqual(self.last_headers['Access-Control-Allow-Origin'], origin)
+
+    def test_other_web_origin_is_rejected(self):
+        origin = 'http://untrusted.example'
+        self.assertEqual(self.request('/api/play', 'OPTIONS', origin=origin)[0], 403)
+        self.assertNotIn('Access-Control-Allow-Origin', self.last_headers)
+        self.assertEqual(self.request('/upload?filename=no.ogg', 'POST', b'ogg', origin)[0], 403)
 
     def test_upload_then_play_stereo_and_stop(self):
         code, uploaded = self.request('/upload?filename=effect.ogg', 'POST', b'ogg')
@@ -149,6 +213,8 @@ class ServerTests(unittest.TestCase):
         code, state = self.request('/api/ost/play', 'POST', b'{}')
         self.assertEqual(code, 200)
         self.assertEqual(state['current']['id'], first['id'])
+        self.assertEqual(state['position_seconds'], 0.0)
+        self.assertIsNone(state['duration_seconds'])
         self.assertEqual(self.mixer.list_playbacks('ost')[0]['channels'],
                          ['front_left', 'rear_left'])
         self.assertEqual(self.request('/api/playbacks')[1]['playbacks'], [])
@@ -160,8 +226,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request('/api/playbacks', 'DELETE')[1]['stopped'], 1)
         self.assertEqual(len(self.mixer.list_playbacks('ost')), 1)
 
+        self.mixer.playbacks[state['playback_id']]['position'] = 2.5
         code, paused = self.request('/api/ost/pause', 'POST')
         self.assertEqual(paused['state'], 'paused')
+        self.assertEqual(paused['position_seconds'], 2.5)
         reversed_channels = json.dumps({'channels': ['rear_left', 'front_left']}).encode('utf-8')
         rerouted = self.request('/api/ost/channels', 'POST', reversed_channels)[1]
         self.assertEqual(rerouted['state'], 'paused')

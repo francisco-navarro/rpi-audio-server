@@ -1,9 +1,13 @@
 from __future__ import absolute_import, division, print_function
 
 import array
+from collections import deque
 import os
+import signal
+import subprocess
 import sys
 import threading
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -92,12 +96,39 @@ class MixerTests(unittest.TestCase):
                 return 0
 
         mixer = Mixer.__new__(Mixer)
+        mixer.sink_lock = threading.RLock()
         mixer.sink = Sink()
         mixer.sink_reader = None
         sink = mixer.sink
         mixer._close_sink()
         self.assertTrue(sink.drained)
         self.assertFalse(sink.terminated)
+
+    def test_forced_close_kills_an_aplay_process_that_ignores_sigterm(self):
+        script = ('import signal,sys,time; '
+                  'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+                  'sys.stdout.write("ready\\n"); sys.stdout.flush(); '
+                  'time.sleep(30)')
+        sink = subprocess.Popen([sys.executable, '-c', script],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        try:
+            self.assertEqual(sink.stdout.readline(), b'ready\n')
+            mixer = Mixer.__new__(Mixer)
+            mixer.sink_lock = threading.RLock()
+            mixer.sink = sink
+            mixer.sink_reader = None
+            mixer.alsa_log = deque()
+            mixer.last_error = None
+            started = time.time()
+            mixer._close_sink(force=True)
+            self.assertLess(time.time() - started, 2)
+            self.assertIsNotNone(sink.poll())
+            self.assertEqual(sink.returncode, -signal.SIGKILL)
+        finally:
+            if sink.poll() is None:
+                sink.kill()
+                sink.wait()
+            sink.stdout.close()
 
 
 if __name__ == '__main__':

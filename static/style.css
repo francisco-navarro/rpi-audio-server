@@ -192,7 +192,13 @@ p { margin: 0; color: var(--muted); line-height: 1.5; }
 .ost-now-label { margin: 26px 0 8px; color: var(--accent); font-size: .66rem; font-weight: 800; letter-spacing: .16em; }
 .ost-player > h2 { min-height: 2.5em; overflow-wrap: anywhere; font-size: 1.7rem; }
 .ost-state { margin-top: 8px; color: #a9bcb9; font-size: .85rem; }
-.ost-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; margin: 30px 0 32px; }
+.ost-progress-block { margin-top: 25px; }
+.ost-progress-block progress { display: block; width: 100%; height: 9px; overflow: hidden; border: 0; border-radius: 999px; background: #334148; color: var(--teal); accent-color: var(--teal); }
+.ost-progress-block progress::-webkit-progress-bar { border-radius: 999px; background: #334148; }
+.ost-progress-block progress::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, #5aa899, var(--teal)); }
+.ost-progress-block progress::-moz-progress-bar { border-radius: 999px; background: var(--teal); }
+.ost-times { display: flex; justify-content: space-between; margin-top: 9px; color: #b0c0c2; font-variant-numeric: tabular-nums; font-size: .75rem; }
+.ost-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; margin: 22px 0 32px; }
 .ost-controls button { display: grid; place-items: center; width: 51px; height: 51px; border: 1px solid #5c6d72; border-radius: 14px; background: #263940; color: #e5f4f3; font-size: 1.12rem; }
 .ost-controls button:hover:not(:disabled), .ost-controls button.is-active { border-color: var(--teal); background: #33514e; color: var(--teal); }
 .ost-controls button:disabled { opacity: .4; cursor: not-allowed; }

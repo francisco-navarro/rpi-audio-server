@@ -1,6 +1,9 @@
 from __future__ import absolute_import, division, print_function
 
+import math
+import os
 import random
+import subprocess
 import threading
 
 from mixer import CHANNELS
@@ -9,7 +12,7 @@ from mixer import CHANNELS
 class OSTController(object):
     """Server-side playlist so REST clients and the web share one player."""
 
-    def __init__(self, files, mixer):
+    def __init__(self, files, mixer, ffprobe='ffprobe'):
         self.files = files
         self.mixer = mixer
         self.lock = threading.RLock()
@@ -20,6 +23,27 @@ class OSTController(object):
         self.shuffle = False
         self.remaining = []
         self.history = []
+        self.ffprobe = ffprobe
+        self.durations = {}
+
+    def _duration_for(self, file_id, path):
+        if file_id in self.durations:
+            return self.durations[file_id]
+        duration = None
+        if self.ffprobe:
+            command = [self.ffprobe, '-v', 'error', '-show_entries',
+                       'format=duration', '-of',
+                       'default=noprint_wrappers=1:nokey=1', path]
+            try:
+                with open(os.devnull, 'wb') as null:
+                    output = subprocess.check_output(command, stderr=null)
+                value = float(output.strip())
+                if value > 0 and not math.isnan(value) and not math.isinf(value):
+                    duration = value
+            except (OSError, subprocess.CalledProcessError, ValueError):
+                pass
+        self.durations[file_id] = duration
+        return duration
 
     def describe(self):
         with self.lock:
@@ -28,6 +52,8 @@ class OSTController(object):
                             if item['id'] == self.current_file_id), None)
             active = (self.playback_id is not None and
                       self.mixer.has_playback(self.playback_id))
+            position = (self.mixer.position_seconds(self.playback_id)
+                        if active else None)
             return {
                 'playlist': playlist,
                 'current': current,
@@ -35,12 +61,16 @@ class OSTController(object):
                 'shuffle': self.shuffle,
                 'channels': list(self.channels),
                 'playback_id': self.playback_id if active else None,
+                'position_seconds': position if position is not None else 0.0,
+                'duration_seconds': (self.durations.get(self.current_file_id)
+                                     if current is not None else None),
             }
 
     def _start(self, file_id, paused=False):
         path = self.files.resolve(file_id)
         if path is None:
             raise ValueError('OST track not found')
+        self._duration_for(file_id, path)
         if self.playback_id is not None:
             self.mixer.stop(self.playback_id)
         self.playback_id = None
