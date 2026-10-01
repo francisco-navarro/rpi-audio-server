@@ -46,8 +46,51 @@ Evita `kill -9` para detener el servidor, porque impide ejecutar esa limpieza.
 El botón **Reiniciar servidor** de la parte superior reinicia toda la Raspberry
 y la página se recarga si el servicio vuelve a estar disponible. Si arrancas
 directamente con `python3 audio_server.py`, el botón permanece desactivado:
-inicia mediante `./start.sh` para habilitarlo. Tras el reinicio del sistema,
-vuelve a ejecutar `./start.sh` si no tienes configurado su arranque automático.
+inicia mediante `./start.sh` o el servicio systemd para habilitarlo.
+
+### Arranque automático con systemd
+
+Para que el servidor se inicie al encender la Raspberry, detén primero el
+`./start.sh` que hayas abierto a mano (Ctrl+C) y ejecuta **sin `sudo`**:
+
+```bash
+./install-systemd.sh
+```
+
+El instalador pide la contraseña de administrador una sola vez. Crea una unidad
+con la ruta de este directorio y tu usuario, activa su arranque al encender y
+la inicia ahora. El servidor de audio corre con tu usuario; solo el paso que
+ejecuta `killall aplay` y `systemctl reboot` tras pulsar el botón corre como
+administrador. Ese paso se instala en una ruta propiedad de root y únicamente
+se ejecuta cuando el servidor sale con el código 75. Detener el servicio de
+forma normal no reinicia la Raspberry. El servicio vuelve a arrancar si el
+proceso falla, pero no cuando sale para reiniciar la máquina.
+
+La pestaña **Arranque** de la propia web muestra si el servicio está activo y
+permite habilitar o deshabilitar su arranque al encender. Se queda en la misma
+página; el ajuste no detiene la reproducción actual. Para usarla hay que
+ejecutar el instalador una vez. Este instala también un permiso limitado a
+esas dos acciones, sin dar permisos de administrador al proceso de audio.
+
+Puedes revisar la unidad sin instalarla con `./install-systemd.sh --dry-run`.
+Para consultar el estado y las últimas líneas del registro:
+
+```bash
+sudo systemctl status rpi-audio-server
+sudo journalctl -u rpi-audio-server -n 50 --no-pager
+```
+
+Para detenerlo, iniciarlo o quitar el arranque automático:
+
+```bash
+sudo systemctl stop rpi-audio-server
+sudo systemctl start rpi-audio-server
+sudo systemctl disable --now rpi-audio-server
+```
+
+Una vez instalado, no arranques `./start.sh` a la vez: ambos intentarían usar el
+puerto 8080 y el mismo dispositivo HDMI. Si mueves este directorio o cambias de
+usuario, vuelve a ejecutar el instalador desde su nueva ubicación.
 
 Abre `http://<ip-de-la-raspberry>:8080/` desde un dispositivo de la misma red.
 La web tiene dos pestañas. **Efectos de sonido** permite subir archivos de hasta

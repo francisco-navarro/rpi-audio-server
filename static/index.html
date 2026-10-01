@@ -25,6 +25,7 @@
     <div class="tabs" role="tablist" aria-label="Modo de audio">
       <button id="effects-tab" class="tab-button is-active" type="button" role="tab" aria-selected="true" aria-controls="effects-panel">Efectos de sonido</button>
       <button id="ost-tab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="ost-panel">OST · Música</button>
+      <button id="service-tab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="service-panel">Arranque</button>
     </div>
 
     <div id="effects-panel" role="tabpanel" aria-labelledby="effects-tab">
@@ -162,6 +163,22 @@
             <p class="ost-routing-note">Si cambias los altavoces durante una canción, esta empieza de nuevo.</p>
           </div>
         </div>
+      </div>
+    </section>
+    <section id="service-panel" class="service-panel" role="tabpanel" aria-labelledby="service-tab" hidden>
+      <div class="panel service-card">
+        <span class="section-number">SERVICIO DE LA RASPBERRY</span>
+        <h2>Arranque automático</h2>
+        <p>Elige si el servidor de sonido debe arrancar solo al encender la Raspberry.</p>
+        <div class="service-indicators">
+          <strong id="service-autostart">Consultando arranque…</strong>
+          <span id="service-running">Consultando servicio…</span>
+        </div>
+        <div class="service-actions">
+          <button id="service-enable" type="button" disabled>Habilitar al encender</button>
+          <button id="service-disable" type="button" disabled>Deshabilitar al encender</button>
+        </div>
+        <p id="service-note" class="service-note" role="status">Este ajuste no detiene la reproducción actual.</p>
       </div>
     </section>
   </main>

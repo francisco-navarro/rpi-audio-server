@@ -25,6 +25,7 @@ except ImportError:  # Python 3
 
 from mixer import Mixer
 from ost import OSTController
+import service_control
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -131,6 +132,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         self.allowed_origins = frozenset(allowed_origins)
         self.instance_id = uuid.uuid4().hex
         self.can_reboot = os.environ.get('RPI_AUDIO_SUPERVISED') == '1'
+        self.can_manage_systemd = os.environ.get('RPI_AUDIO_SYSTEMD_MANAGED') == '1'
         self.reboot_requested = threading.Event()
         self.playback_log = deque(maxlen=20)
         self.playback_log_lock = threading.Lock()
@@ -259,6 +261,13 @@ class Handler(BaseHTTPRequestHandler):
             health['can_reboot'] = self.server.can_reboot
             health['playback_log'] = self.server.recent_playbacks()
             return self._json(200, health)
+        if path == '/api/systemd':
+            try:
+                state = service_control.status()
+                state['manageable'] = self.server.can_manage_systemd
+                return self._json(200, state)
+            except RuntimeError as exc:
+                return self._error(503, str(exc))
         static = {
             '/': ('index.html', 'text/html; charset=utf-8'),
             '/app.js': ('app.js', 'application/javascript; charset=utf-8'),
@@ -274,11 +283,31 @@ class Handler(BaseHTTPRequestHandler):
         if not self._same_origin():
             return self._error(403, 'Origin is not allowed')
         parsed = urlsplit(self.path)
+        if parsed.path == '/api/systemd':
+            if not self.headers.get('Origin') or not self._own_origin():
+                return self._error(403, 'Solo se puede cambiar systemd desde la web de este servidor')
+            if not self.server.can_manage_systemd:
+                return self._error(503, 'Inicia el servidor mediante su servicio systemd')
+            try:
+                payload = self._read_json()
+                enabled = payload.get('enabled')
+                if not isinstance(enabled, bool):
+                    raise ValueError('enabled debe ser true o false')
+                service_control.set_enabled(enabled)
+                state = service_control.status()
+                state['manageable'] = True
+                return self._json(200, state)
+            except OverflowError as exc:
+                return self._error(413, str(exc))
+            except (ValueError, UnicodeDecodeError) as exc:
+                return self._error(400, str(exc))
+            except RuntimeError as exc:
+                return self._error(503, str(exc))
         if parsed.path == '/api/reboot':
             if not self._own_origin():
                 return self._error(403, 'Origin is not allowed to reboot the server')
             if not self.server.can_reboot:
-                return self._error(503, 'Inicia el servidor con ./start.sh para reiniciar la Raspberry')
+                return self._error(503, 'Inicia el servidor con ./start.sh o systemd para reiniciar la Raspberry')
             self._json(202, {'rebooting': True, 'instance_id': self.server.instance_id})
             self.server.request_reboot()
             return

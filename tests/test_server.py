@@ -198,6 +198,7 @@ class ServerTests(unittest.TestCase):
         handler.server.allowed_origins = frozenset(('http://mansiones.local',))
         handler.server.instance_id = 'instance-1'
         handler.server.can_reboot = getattr(self, 'can_reboot', True)
+        handler.server.can_manage_systemd = getattr(self, 'can_manage_systemd', False)
         handler.server.request_reboot = lambda: setattr(self, 'reboot_called', True)
         handler.server.record_playback = self.playback_log.append
         handler.server.recent_playbacks = lambda: list(self.playback_log)
@@ -257,6 +258,49 @@ class ServerTests(unittest.TestCase):
         self.can_reboot = False
         self.assertEqual(self.request('/api/reboot', 'POST')[0], 503)
         self.assertFalse(self.reboot_called)
+
+    def test_systemd_autostart_can_only_change_from_its_own_web_page(self):
+        enabled = [False]
+        changes = []
+        old_status = audio_server.service_control.status
+        old_set_enabled = audio_server.service_control.set_enabled
+        audio_server.service_control.status = lambda: {
+            'installed': True, 'enabled': enabled[0], 'active': True}
+
+        def set_enabled(value):
+            changes.append(value)
+            enabled[0] = value
+
+        audio_server.service_control.set_enabled = set_enabled
+        self.can_manage_systemd = True
+        own_origin = 'http://127.0.0.1:8080'
+        try:
+            code, state = self.request('/api/systemd')
+            self.assertEqual(code, 200)
+            self.assertEqual(state, {'installed': True, 'enabled': False,
+                                     'active': True, 'manageable': True})
+            body = json.dumps({'enabled': True}).encode('utf-8')
+            self.assertEqual(self.request('/api/systemd', 'POST', body)[0], 403)
+            self.assertEqual(self.request('/api/systemd', 'POST', body,
+                                          'http://mansiones.local')[0], 403)
+            self.assertEqual(changes, [])
+            invalid = json.dumps({'enabled': 'yes'}).encode('utf-8')
+            self.assertEqual(self.request('/api/systemd', 'POST', invalid,
+                                          own_origin)[0], 400)
+            code, state = self.request('/api/systemd', 'POST', body, own_origin)
+            self.assertEqual(code, 200)
+            self.assertTrue(state['enabled'])
+            self.assertEqual(changes, [True])
+            body = json.dumps({'enabled': False}).encode('utf-8')
+            self.assertEqual(self.request('/api/systemd', 'POST', body,
+                                          own_origin)[0], 200)
+            self.assertEqual(changes, [True, False])
+            self.can_manage_systemd = False
+            self.assertEqual(self.request('/api/systemd', 'POST', body,
+                                          own_origin)[0], 503)
+        finally:
+            audio_server.service_control.status = old_status
+            audio_server.service_control.set_enabled = old_set_enabled
 
     def test_upload_then_play_stereo_and_stop(self):
         code, uploaded = self.request('/upload?filename=effect.ogg', 'POST', b'ogg')

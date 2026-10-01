@@ -18,6 +18,11 @@ const ffmpegLogElement = document.getElementById('ffmpeg-log');
 const audioMetricsElement = document.getElementById('audio-metrics');
 const audioTracesElement = document.querySelector('.audio-traces');
 const effectsPanelElement = document.getElementById('effects-panel');
+const serviceAutostartElement = document.getElementById('service-autostart');
+const serviceRunningElement = document.getElementById('service-running');
+const serviceNoteElement = document.getElementById('service-note');
+const serviceEnableButton = document.getElementById('service-enable');
+const serviceDisableButton = document.getElementById('service-disable');
 let files = [];
 let selectedId = null;
 let lastAudioError = null;
@@ -28,6 +33,7 @@ let ostVolumeEditing = false;
 let healthInFlight = false;
 let healthTimer = null;
 let rebooting = false;
+let serviceBusy = false;
 
 const ostPlaylistElement = document.getElementById('ost-playlist');
 const ostPanelElement = document.getElementById('ost-panel');
@@ -74,6 +80,60 @@ async function request(url, options = {}) {
   return data;
 }
 
+function renderSystemd(state) {
+  if (!state.installed) {
+    serviceAutostartElement.textContent = 'Servicio no instalado';
+    serviceRunningElement.textContent = 'Sin unidad systemd';
+    serviceNoteElement.textContent = 'Ejecuta ./install-systemd.sh una vez en la Raspberry.';
+  } else {
+    serviceAutostartElement.textContent = state.enabled ? 'Arranque automático activado' : 'Arranque automático desactivado';
+    serviceRunningElement.textContent = state.active ? 'Servidor en marcha' : 'Servicio detenido';
+    serviceNoteElement.textContent = !state.manageable
+      ? 'Inicia el servidor mediante systemd para cambiar este ajuste desde aquí.'
+      : state.enabled
+        ? 'El audio actual continúa aunque cambies este ajuste.'
+        : 'Después del próximo reinicio, necesitarás la terminal para volver a iniciar el servidor.';
+  }
+  serviceAutostartElement.classList.toggle('enabled', Boolean(state.installed && state.enabled));
+  serviceEnableButton.disabled = serviceBusy || !state.installed || !state.manageable || state.enabled;
+  serviceDisableButton.disabled = serviceBusy || !state.installed || !state.manageable || !state.enabled;
+}
+
+async function refreshSystemd() {
+  if (serviceBusy) return;
+  try {
+    renderSystemd(await request('/api/systemd', {cache: 'no-store'}));
+  } catch (error) {
+    serviceAutostartElement.textContent = 'Estado no disponible';
+    serviceRunningElement.textContent = '';
+    serviceNoteElement.textContent = error.message;
+    serviceEnableButton.disabled = true;
+    serviceDisableButton.disabled = true;
+  }
+}
+
+async function changeSystemd(enabled) {
+  serviceBusy = true;
+  serviceEnableButton.disabled = true;
+  serviceDisableButton.disabled = true;
+  try {
+    const state = await request('/api/systemd', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled})
+    });
+    serviceBusy = false;
+    renderSystemd(state);
+    message(enabled ? 'Arranque automático habilitado.' : 'Arranque automático deshabilitado.');
+  } catch (error) {
+    serviceBusy = false;
+    message(error.message, true);
+    await refreshSystemd();
+  }
+}
+
+serviceEnableButton.addEventListener('click', () => changeSystemd(true));
+serviceDisableButton.addEventListener('click', () => changeSystemd(false));
+
 restartButton.addEventListener('click', async () => {
   rebooting = true;
   restartButton.disabled = true;
@@ -94,7 +154,7 @@ restartButton.addEventListener('click', async () => {
       } catch (_) { /* El servidor está cerrando o arrancando. */ }
       await new Promise(resolve => setTimeout(resolve, 600));
     }
-    throw new Error('El servidor no volvió a estar disponible. Si es necesario, arráncalo con ./start.sh.');
+    throw new Error('El servidor no volvió a estar disponible. Comprueba el servicio systemd o arráncalo con ./start.sh.');
   } catch (error) {
     rebooting = false;
     restartButton.disabled = false;
@@ -432,7 +492,7 @@ async function refreshHealth() {
       audioStatusElement.textContent = `Esperando señal para ${health.device}.`;
     }
     restartButton.disabled = !health.can_reboot;
-    restartButton.title = health.can_reboot ? 'Reinicia toda la Raspberry' : 'Arranca el servidor con ./start.sh para activar este botón';
+    restartButton.title = health.can_reboot ? 'Reinicia toda la Raspberry' : 'Arranca el servidor con ./start.sh o systemd para activar este botón';
     if (health.last_error && health.last_error !== lastAudioError) {
       message(health.last_error, true);
     }
@@ -450,7 +510,8 @@ function scheduleHealth() {
 
 function refreshActiveTab() {
   if (rebooting) return;
-  const update = effectsPanelElement.hidden ? refreshOST() : refreshPlaybacks();
+  const update = !effectsPanelElement.hidden ? refreshPlaybacks()
+    : !ostPanelElement.hidden ? refreshOST() : refreshSystemd();
   update.catch(error => message(error.message, true));
 }
 
