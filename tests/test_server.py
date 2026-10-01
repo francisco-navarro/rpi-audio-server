@@ -101,6 +101,8 @@ class ServerTests(unittest.TestCase):
         self.ost_files = FileStore(os.path.join(self.temp, 'ost'), ('.mp3',))
         self.mixer = FakeMixer()
         self.ost = OSTController(self.ost_files, self.mixer, ffprobe=None)
+        self.playback_log = []
+        self.terminal_log = []
 
     def tearDown(self):
         shutil.rmtree(self.temp)
@@ -117,7 +119,7 @@ class ServerTests(unittest.TestCase):
 
         class FakeServer(object):
             def __init__(self, *args, **kwargs):
-                self.restart_requested = threading.Event()
+                self.reboot_requested = threading.Event()
 
             def serve_forever(self):
                 signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
@@ -137,7 +139,7 @@ class ServerTests(unittest.TestCase):
             audio_server.ThreadedHTTPServer = old_server
         self.assertEqual(closed, ['server', 'mixer'])
 
-    def test_restart_closes_audio_and_socket_before_replacing_process(self):
+    def test_reboot_closes_audio_and_socket_before_returning_to_start_script(self):
         events = []
 
         class FakeMixer(object):
@@ -149,31 +151,32 @@ class ServerTests(unittest.TestCase):
 
         class FakeServer(object):
             def __init__(self, *args, **kwargs):
-                self.restart_requested = threading.Event()
+                self.reboot_requested = threading.Event()
 
             def serve_forever(self):
-                self.restart_requested.set()
+                self.reboot_requested.set()
 
             def server_close(self):
                 events.append('server')
 
         old_mixer = audio_server.Mixer
         old_server = audio_server.ThreadedHTTPServer
-        old_execv = audio_server.os.execv
-        arguments = ['--port', '18080', '--data-dir', os.path.join(self.temp, 'restart-effects'),
-                     '--ost-dir', os.path.join(self.temp, 'restart-ost')]
+        old_supervised = os.environ.get('RPI_AUDIO_SUPERVISED')
         try:
             audio_server.Mixer = FakeMixer
             audio_server.ThreadedHTTPServer = FakeServer
-            audio_server.os.execv = lambda binary, command: events.append(('execv', binary, command))
-            audio_server.main(arguments)
+            os.environ['RPI_AUDIO_SUPERVISED'] = '1'
+            result = audio_server.main(['--data-dir', os.path.join(self.temp, 'supervised-effects'),
+                                        '--ost-dir', os.path.join(self.temp, 'supervised-ost')])
         finally:
             audio_server.Mixer = old_mixer
             audio_server.ThreadedHTTPServer = old_server
-            audio_server.os.execv = old_execv
-        self.assertEqual(events[:2], ['server', 'mixer'])
-        self.assertEqual(events[2], ('execv', sys.executable,
-                         [sys.executable, os.path.abspath(audio_server.__file__)] + arguments))
+            if old_supervised is None:
+                os.environ.pop('RPI_AUDIO_SUPERVISED', None)
+            else:
+                os.environ['RPI_AUDIO_SUPERVISED'] = old_supervised
+        self.assertEqual(result, audio_server.REBOOT_EXIT_CODE)
+        self.assertEqual(events, ['server', 'mixer'])
 
     def request(self, path, method='GET', body=None, origin=None):
         handler = Handler.__new__(Handler)
@@ -192,7 +195,11 @@ class ServerTests(unittest.TestCase):
         handler.server.ost = self.ost
         handler.server.allowed_origins = frozenset(('http://mansiones.local',))
         handler.server.instance_id = 'instance-1'
-        handler.server.request_restart = lambda: setattr(self, 'restart_called', True)
+        handler.server.can_reboot = getattr(self, 'can_reboot', True)
+        handler.server.request_reboot = lambda: setattr(self, 'reboot_called', True)
+        handler.server.record_playback = self.playback_log.append
+        handler.server.recent_playbacks = lambda: list(self.playback_log)
+        handler.log_message = lambda format_string, *args: self.terminal_log.append(format_string % args)
         status = []
         self.last_headers = {}
         handler.send_response = lambda code: status.append(code)
@@ -215,6 +222,13 @@ class ServerTests(unittest.TestCase):
         code, playback = self.request('/api/play', 'POST', body, origin)
         self.assertEqual(code, 201)
         self.assertEqual(playback['channels'], ['lfe'])
+        self.assertEqual(self.mixer.playbacks[playback['id']]['volume'], 1.0)
+        logged = self.request('/api/health')[1]['playback_log'][-1]
+        self.assertIn('volumen 100 %', logged)
+        self.assertIn('http://127.0.0.1:8080/api/play', logged)
+        self.assertIn('"file_id":"%s"' % uploaded['id'], logged)
+        self.assertIn('"channel":"lfe"', logged)
+        self.assertIn('curl -X POST', self.terminal_log[-1])
         self.assertEqual(self.request('/api/files', origin=origin)[0], 200)
         self.assertEqual(self.last_headers['Access-Control-Allow-Origin'], origin)
 
@@ -224,16 +238,19 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn('Access-Control-Allow-Origin', self.last_headers)
         self.assertEqual(self.request('/upload?filename=no.ogg', 'POST', b'ogg', origin)[0], 403)
 
-    def test_restart_endpoint_returns_instance_and_requests_restart(self):
-        self.restart_called = False
+    def test_reboot_endpoint_returns_instance_and_requests_reboot(self):
+        self.reboot_called = False
         self.assertEqual(self.request('/api/health')[1]['instance_id'], 'instance-1')
-        code, response = self.request('/api/restart', 'POST')
+        code, response = self.request('/api/reboot', 'POST')
         self.assertEqual(code, 202)
-        self.assertEqual(response, {'restarting': True, 'instance_id': 'instance-1'})
-        self.assertTrue(self.restart_called)
-        self.restart_called = False
-        self.assertEqual(self.request('/api/restart', 'POST', origin='http://untrusted.example')[0], 403)
-        self.assertFalse(self.restart_called)
+        self.assertEqual(response, {'rebooting': True, 'instance_id': 'instance-1'})
+        self.assertTrue(self.reboot_called)
+        self.reboot_called = False
+        self.assertEqual(self.request('/api/reboot', 'POST', origin='http://mansiones.local')[0], 403)
+        self.assertFalse(self.reboot_called)
+        self.can_reboot = False
+        self.assertEqual(self.request('/api/reboot', 'POST')[0], 503)
+        self.assertFalse(self.reboot_called)
 
     def test_upload_then_play_stereo_and_stop(self):
         code, uploaded = self.request('/upload?filename=effect.ogg', 'POST', b'ogg')
@@ -272,6 +289,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(state['channels'], ['front_left', 'rear_left'])
         code, state = self.request('/api/ost/play', 'POST', b'{}')
         self.assertEqual(code, 200)
+        self.assertIn('volumen 60 %', self.playback_log[-1])
+        self.assertIn('http://127.0.0.1:8080/api/ost/play', self.playback_log[-1])
         self.assertEqual(state['current']['id'], first['id'])
         self.assertEqual(state['position_seconds'], 0.0)
         self.assertIsNone(state['duration_seconds'])

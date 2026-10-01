@@ -13,6 +13,7 @@ const stopAllButton = document.getElementById('stop-all');
 const restartButton = document.getElementById('restart-server');
 const audioStatusElement = document.getElementById('audio-status');
 const alsaLogElement = document.getElementById('alsa-log');
+const playbackLogElement = document.getElementById('playback-log');
 const ffmpegLogElement = document.getElementById('ffmpeg-log');
 const audioMetricsElement = document.getElementById('audio-metrics');
 const audioTracesElement = document.querySelector('.audio-traces');
@@ -26,7 +27,7 @@ let ostEndTimer = null;
 let ostVolumeEditing = false;
 let healthInFlight = false;
 let healthTimer = null;
-let restarting = false;
+let rebooting = false;
 
 const ostPlaylistElement = document.getElementById('ost-playlist');
 const ostPanelElement = document.getElementById('ost-panel');
@@ -74,16 +75,18 @@ async function request(url, options = {}) {
 }
 
 restartButton.addEventListener('click', async () => {
-  restarting = true;
+  rebooting = true;
   restartButton.disabled = true;
-  message('Reiniciando el servidor de audio…');
+  message('Reiniciando la Raspberry…');
   try {
-    const previous = await request('/api/restart', {method: 'POST'});
-    const deadline = Date.now() + 30000;
+    const previous = await request('/api/reboot', {method: 'POST'});
+    const deadline = Date.now() + 180000;
     await new Promise(resolve => setTimeout(resolve, 500));
     while (Date.now() < deadline) {
       try {
-        const health = await request('/api/health', {cache: 'no-store'});
+        const health = await request('/api/health', {
+          cache: 'no-store', signal: AbortSignal.timeout(3000)
+        });
         if (health.instance_id && health.instance_id !== previous.instance_id) {
           window.location.reload();
           return;
@@ -91,9 +94,9 @@ restartButton.addEventListener('click', async () => {
       } catch (_) { /* El servidor está cerrando o arrancando. */ }
       await new Promise(resolve => setTimeout(resolve, 600));
     }
-    throw new Error('El servidor no volvió a estar disponible. Comprueba su terminal.');
+    throw new Error('El servidor no volvió a estar disponible. Si es necesario, arráncalo con ./start.sh.');
   } catch (error) {
-    restarting = false;
+    rebooting = false;
     restartButton.disabled = false;
     message(error.message, true);
   }
@@ -411,14 +414,15 @@ for (const select of [ostLeftElement, ostRightElement]) {
 }
 
 async function refreshHealth() {
-  if (restarting) return;
+  if (rebooting) return;
   if (healthInFlight) return;
   healthInFlight = true;
   try {
     const health = await request('/api/health');
+    playbackLogElement.textContent = health.playback_log?.join('\n\n') || 'Sin reproducciones todavía.';
     alsaLogElement.textContent = health.alsa_log?.join('\n') || 'Sin actividad todavía.';
     ffmpegLogElement.textContent = health.ffmpeg_log?.join('\n') || 'Sin actividad todavía.';
-    audioMetricsElement.textContent = `Retrasos: ${health.late_blocks ?? 0} · Sin datos de FFmpeg: ${health.decode_starvations ?? 0} · Cortes ALSA: ${health.alsa_underruns ?? 0} · Mezcla máx.: ${(health.max_mix_ms ?? 0).toFixed(1)} ms · Escritura máx.: ${(health.max_write_ms ?? 0).toFixed(1)} ms`;
+    audioMetricsElement.textContent = `Pico PCM: ${health.last_signal_peak ?? 0} · Retrasos: ${health.late_blocks ?? 0} · Sin datos de FFmpeg: ${health.decode_starvations ?? 0} · Cortes ALSA: ${health.alsa_underruns ?? 0} · Mezcla máx.: ${(health.max_mix_ms ?? 0).toFixed(1)} ms · Escritura máx.: ${(health.max_write_ms ?? 0).toFixed(1)} ms`;
     audioStatusElement.classList.toggle('error', Boolean(health.last_error));
     if (health.last_error) {
       audioStatusElement.textContent = health.last_error;
@@ -427,6 +431,8 @@ async function refreshHealth() {
     } else {
       audioStatusElement.textContent = `Esperando señal para ${health.device}.`;
     }
+    restartButton.disabled = !health.can_reboot;
+    restartButton.title = health.can_reboot ? 'Reinicia toda la Raspberry' : 'Arranca el servidor con ./start.sh para activar este botón';
     if (health.last_error && health.last_error !== lastAudioError) {
       message(health.last_error, true);
     }
@@ -443,7 +449,7 @@ function scheduleHealth() {
 }
 
 function refreshActiveTab() {
-  if (restarting) return;
+  if (rebooting) return;
   const update = effectsPanelElement.hidden ? refreshOST() : refreshPlaybacks();
   update.catch(error => message(error.message, true));
 }

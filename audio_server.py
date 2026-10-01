@@ -2,10 +2,12 @@ from __future__ import absolute_import, division, print_function
 
 import json
 import os
+import shlex
 import signal
 import sys
 import threading
 import uuid
+from collections import deque
 from optparse import OptionParser
 
 try:
@@ -29,6 +31,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 EXTENSIONS = frozenset(('.mp3', '.ogg', '.wav'))
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_JSON_BYTES = 8192
+REBOOT_EXIT_CODE = 75
 DEFAULT_ALLOWED_ORIGINS = (
     'http://mansiones.local',
     'http://mansiones.local:5173',
@@ -127,12 +130,23 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         self.ost = ost
         self.allowed_origins = frozenset(allowed_origins)
         self.instance_id = uuid.uuid4().hex
-        self.restart_requested = threading.Event()
+        self.can_reboot = os.environ.get('RPI_AUDIO_SUPERVISED') == '1'
+        self.reboot_requested = threading.Event()
+        self.playback_log = deque(maxlen=20)
+        self.playback_log_lock = threading.Lock()
 
-    def request_restart(self):
-        if self.restart_requested.is_set():
+    def record_playback(self, entry):
+        with self.playback_log_lock:
+            self.playback_log.append(entry)
+
+    def recent_playbacks(self):
+        with self.playback_log_lock:
+            return list(self.playback_log)
+
+    def request_reboot(self):
+        if self.reboot_requested.is_set():
             return
-        self.restart_requested.set()
+        self.reboot_requested.set()
         timer = threading.Timer(0.2, self.shutdown)
         timer.daemon = True
         timer.start()
@@ -162,6 +176,16 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, status, message):
         self._json(status, {'error': message})
 
+    def _log_playback_request(self, path, payload, playback_id, volume):
+        url = 'http://%s%s' % (self.headers.get('Host'), path)
+        body = json.dumps(payload, ensure_ascii=True, separators=(',', ':'))
+        command = "curl -X POST %s -H 'Content-Type: application/json' --data %s" % (
+            shlex.quote(url), shlex.quote(body))
+        entry = 'Reproducción %s · volumen %s %%\n%s' % (
+            playback_id, volume, command)
+        self.server.record_playback(entry)
+        self.log_message('%s', entry.replace('\n', ' | '))
+
     def _same_origin(self):
         origin = self.headers.get('Origin')
         if not origin:
@@ -169,6 +193,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(origin)
         return ((parsed.netloc == self.headers.get('Host') and parsed.scheme in ('http', 'https'))
                 or origin in self.server.allowed_origins)
+
+    def _own_origin(self):
+        origin = self.headers.get('Origin')
+        if not origin:
+            return True
+        parsed = urlsplit(origin)
+        return parsed.netloc == self.headers.get('Host') and parsed.scheme in ('http', 'https')
 
     def _cors_headers(self):
         origin = self.headers.get('Origin')
@@ -225,6 +256,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/health':
             health = self.server.mixer.health()
             health['instance_id'] = self.server.instance_id
+            health['can_reboot'] = self.server.can_reboot
+            health['playback_log'] = self.server.recent_playbacks()
             return self._json(200, health)
         static = {
             '/': ('index.html', 'text/html; charset=utf-8'),
@@ -241,9 +274,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._same_origin():
             return self._error(403, 'Origin is not allowed')
         parsed = urlsplit(self.path)
-        if parsed.path == '/api/restart':
-            self._json(202, {'restarting': True, 'instance_id': self.server.instance_id})
-            self.server.request_restart()
+        if parsed.path == '/api/reboot':
+            if not self._own_origin():
+                return self._error(403, 'Origin is not allowed to reboot the server')
+            if not self.server.can_reboot:
+                return self._error(503, 'Inicia el servidor con ./start.sh para reiniciar la Raspberry')
+            self._json(202, {'rebooting': True, 'instance_id': self.server.instance_id})
+            self.server.request_reboot()
             return
         if parsed.path in ('/upload', '/api/ost/upload'):
             try:
@@ -280,6 +317,13 @@ class Handler(BaseHTTPRequestHandler):
                 if path is None:
                     return self._error(404, 'Audio file not found')
                 playback = self.server.mixer.play(file_id, path, channels)
+                replay_payload = {'file_id': file_id}
+                if 'channel' in payload:
+                    replay_payload['channel'] = payload['channel']
+                else:
+                    replay_payload['channels'] = channels
+                self._log_playback_request('/api/play', replay_payload,
+                                           playback['id'], 100)
                 return self._json(201, playback)
             except OverflowError as exc:
                 return self._error(409, str(exc))
@@ -305,6 +349,9 @@ class Handler(BaseHTTPRequestHandler):
                     if file_id is not None and not isinstance(file_id, string_types):
                         raise ValueError('file_id must be a string')
                     result = self.server.ost.play(file_id)
+                    self._log_playback_request('/api/ost/play',
+                                               {'file_id': result['current']['id']},
+                                               result['playback_id'], result['volume'])
                 elif parsed.path == '/api/ost/shuffle':
                     result = self.server.ost.set_shuffle(self._read_json().get('shuffle'))
                 elif parsed.path == '/api/ost/channels':
@@ -380,10 +427,10 @@ def main(argv=None):
             server.server_close()
         finally:
             mixer.close()
-    if server.restart_requested.is_set():
-        arguments = list(argv) if argv is not None else sys.argv[1:]
-        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + arguments)
+    if server.reboot_requested.is_set():
+        return REBOOT_EXIT_CODE
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

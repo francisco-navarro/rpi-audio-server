@@ -17,7 +17,7 @@
         <p>Elige un archivo y envíalo al altavoz que quieras.</p>
       </div>
       <div class="output-badge"><span class="output-dot"></span> SALIDA HDMI <strong>48 kHz · 5.1</strong></div>
-      <button id="restart-server" class="restart-server" type="button">↻ Reiniciar servidor</button>
+      <button id="restart-server" class="restart-server" type="button" disabled>↻ Reiniciar servidor</button>
     </header>
 
     <div id="message" class="message" role="status" aria-live="polite"></div>
@@ -100,6 +100,8 @@
           <details class="audio-traces">
             <summary>Ver trazas de audio</summary>
             <p id="audio-metrics" class="audio-metrics">Esperando mediciones.</p>
+            <h3>POST para repetir la reproducción</h3>
+            <pre id="playback-log">Sin reproducciones todavía.</pre>
             <h3>ALSA / aplay</h3>
             <pre id="alsa-log">Sin actividad todavía.</pre>
             <h3>FFmpeg</h3>

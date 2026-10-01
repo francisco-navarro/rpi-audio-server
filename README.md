@@ -11,7 +11,7 @@ Instala los programas de audio del sistema:
 
 ```bash
 sudo apt-get update
-sudo apt-get install ffmpeg alsa-utils
+sudo apt-get install ffmpeg alsa-utils psmisc
 ```
 
 El dispositivo configurado por defecto es el que se verificó con:
@@ -23,8 +23,15 @@ speaker-test -D plughw:CARD=b2,DEV=0 -c 6 -r 48000 -t wav -l 1
 Arranca la aplicación manualmente desde este directorio:
 
 ```bash
-python3 audio_server.py
+./start.sh
 ```
+
+`start.sh` pide la contraseña de administrador con `sudo` sin almacenarla.
+Arranca `python3 audio_server.py --device 'plughw:CARD=b2,DEV=0' --port 8080`.
+Al pulsar **Reiniciar servidor**, Python cierra el audio y el script ejecuta
+`sudo killall aplay` seguido de `sudo reboot`: se reinicia toda la Raspberry.
+Si la autorización ha caducado, `sudo` vuelve a pedir la contraseña en esa
+terminal.
 
 En otro equipo o si cambia el nombre ALSA, indica el dispositivo y el puerto:
 
@@ -36,9 +43,11 @@ Detén el servidor con Ctrl+C o `kill -TERM <PID>`. El servidor cierra el audio
 y deja que `aplay` vacíe su búfer antes de salir. `aplay` y FFmpeg están en
 sesiones separadas para que Ctrl+C no interrumpa directamente la salida ALSA.
 Evita `kill -9` para detener el servidor, porque impide ejecutar esa limpieza.
-El botón **Reiniciar servidor** de la parte superior hace este cierre y vuelve
-a iniciar el proceso con los mismos argumentos; la página se recarga cuando
-detecta la nueva instancia.
+El botón **Reiniciar servidor** de la parte superior reinicia toda la Raspberry
+y la página se recarga si el servicio vuelve a estar disponible. Si arrancas
+directamente con `python3 audio_server.py`, el botón permanece desactivado:
+inicia mediante `./start.sh` para habilitarlo. Tras el reinicio del sistema,
+vuelve a ejecutar `./start.sh` si no tienes configurado su arranque automático.
 
 Abre `http://<ip-de-la-raspberry>:8080/` desde un dispositivo de la misma red.
 La web tiene dos pestañas. **Efectos de sonido** permite subir archivos de hasta
@@ -108,10 +117,10 @@ inexistentes y `409` cuando ya suenan cuatro archivos.
 altavoces elegidos, el modo aleatorio, `position_seconds` y
 `duration_seconds` y `volume` (porcentaje de 0 a 100). El volumen de la OST
 empieza al 60 %; el control de la web lo cambia durante la reproducción sin
-reiniciar la pista ni alterar los efectos. El tiempo reproducido se detiene al pausar y vuelve a cero
-al pasar a la siguiente pista. La duración se obtiene con `ffprobe`, incluido
-en el paquete `ffmpeg`. La playlist OST acepta sólo MP3 y se sube a una
-carpeta independiente:
+reiniciar la pista ni alterar los efectos. El tiempo reproducido se detiene al
+pausar y vuelve a cero al pasar a la siguiente pista. La duración se obtiene
+con `ffprobe`, incluido en el paquete `ffmpeg`. La playlist OST acepta sólo
+MP3 y se sube a una carpeta independiente:
 
 ```bash
 curl -X POST --data-binary @musica.mp3 \
@@ -164,7 +173,10 @@ correspondencia de canales del motor sigue el orden ALSA que verificaste con
 ## Si no se oye nada
 
 Tras pulsar un altavoz, abre **Ver trazas de audio** bajo **Sonando ahora** o
-consulta `http://<ip-de-la-raspberry>:8080/api/health`. Los campos `alsa_log` y
+consulta `http://<ip-de-la-raspberry>:8080/api/health`. El apartado **POST para
+repetir la reproducción** muestra un `curl` copiable con la URL y el JSON
+exactos; también aparece en la terminal. Los efectos se envían al 100 % y la
+OST usa su volumen independiente. Los campos `alsa_log` y
 `ffmpeg_log` contienen las últimas 80 líneas de cada programa, también cuando
 no se produce un error. La web consulta este endpoint al abrirse, tras iniciar
 una reproducción y mientras esté desplegado el panel de trazas; no lo sondea
