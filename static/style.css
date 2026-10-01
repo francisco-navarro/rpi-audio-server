@@ -52,6 +52,9 @@ p { margin: 0; color: var(--muted); line-height: 1.5; }
 }
 .output-badge strong { margin-left: 5px; color: #e1f7ef; font-size: .72rem; letter-spacing: 0; }
 .output-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 12px var(--teal); }
+.restart-server { flex: none; padding: 10px 13px; border: 1px solid #5c6d72; border-radius: 11px; background: #263940; color: #e5f4f3; font-size: .76rem; font-weight: 750; }
+.restart-server:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); }
+.restart-server:disabled { opacity: .55; cursor: wait; }
 .workspace { display: grid; grid-template-columns: minmax(280px, 355px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .control-column { display: grid; gap: 20px; min-width: 0; }
 .panel {
@@ -204,6 +207,11 @@ p { margin: 0; color: var(--muted); line-height: 1.5; }
 .ost-controls button:disabled { opacity: .4; cursor: not-allowed; }
 .ost-controls .ost-primary { width: 63px; height: 63px; border-color: #89c9b8; border-radius: 18px; background: #9cdbc7; color: #162724; font-size: 1.4rem; }
 .ost-controls .ost-primary:hover:not(:disabled) { background: #b7efdc; color: #162724; }
+.ost-volume { margin: 0 0 24px; padding: 16px 18px; border: 1px solid #3f5554; border-radius: 14px; background: #1b2a2d; }
+.ost-volume-heading { display: flex; justify-content: space-between; gap: 12px; color: #dce6e3; font-size: .82rem; font-weight: 750; }
+.ost-volume-heading output { color: var(--teal); font-variant-numeric: tabular-nums; }
+.ost-volume input { display: block; width: 100%; margin: 13px 0 0; accent-color: var(--teal); cursor: pointer; }
+.ost-volume input:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
 .ost-routing { padding: 19px; border: 1px solid #3f5554; border-radius: 14px; background: #1b2a2d; }
 .ost-routing h3 { margin: 0 0 5px; font-size: 1rem; }
 .ost-routing > p { font-size: .8rem; }

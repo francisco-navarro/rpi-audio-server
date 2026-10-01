@@ -11,7 +11,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from mixer import CHANNELS, FRAMES_PER_BLOCK, Mixer, Playback, mix_block
+from mixer import CHANNELS, FRAMES_PER_BLOCK, Mixer, Playback, _spawn_audio_process, mix_block
 
 
 def pcm(values):
@@ -33,6 +33,18 @@ def decode(data):
 
 
 class MixerTests(unittest.TestCase):
+    def test_audio_children_do_not_share_the_terminal_process_group(self):
+        child = _spawn_audio_process(
+            [sys.executable, '-c', 'import time; time.sleep(30)'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        try:
+            self.assertNotEqual(os.getpgid(child.pid), os.getpgrp())
+        finally:
+            child.terminate()
+            child.wait()
+            child.stdin.close()
+            child.stdout.close()
+
     def test_stereo_left_and_right_go_to_ordered_destinations(self):
         source = pcm([1000, -2000] * FRAMES_PER_BLOCK)
         result = decode(mix_block([(source, (CHANNELS['front_left'],
@@ -70,6 +82,17 @@ class MixerTests(unittest.TestCase):
         self.assertEqual(result[0], 12000)
         self.assertLess(result[1], 12000)
         self.assertGreater(result[-1], result[1])
+
+    def test_playback_volume_scales_pcm_and_can_change_while_playing(self):
+        playback = Playback('file', 'file.wav', ('front_left', 'front_right'),
+                            kind='ost', volume=0.6)
+        source = pcm([10000, -10000] * FRAMES_PER_BLOCK)
+        self.assertEqual(list(decode(playback.apply_volume(source))[:2]),
+                         [6000, -6000])
+        playback.volume = 0.0
+        self.assertEqual(decode(playback.apply_volume(source))[0], 0)
+        playback.volume = 1.0
+        self.assertIs(playback.apply_volume(source), source)
 
     def test_output_is_allowed_to_drain_before_exit(self):
         class Sink(object):

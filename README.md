@@ -32,12 +32,13 @@ En otro equipo o si cambia el nombre ALSA, indica el dispositivo y el puerto:
 python3 audio_server.py --device 'plughw:CARD=b2,DEV=0' --port 8080
 ```
 
-Detén el servidor con Ctrl+C o `kill -TERM <PID>`. Ambas vías cierran las
-reproducciones y liberan la salida HDMI; si `aplay` no responde, el cierre lo
-termina de forma forzada. Evita `kill -9` para detener el servidor, porque
-impide ejecutar esa limpieza. Si una versión anterior dejó el dispositivo
-ocupado, busca el proceso `aplay` que usa `plughw:CARD=b2,DEV=0` con
-`ps -ef | grep '[a]play'` y termina ese PID antes de volver a arrancar.
+Detén el servidor con Ctrl+C o `kill -TERM <PID>`. El servidor cierra el audio
+y deja que `aplay` vacíe su búfer antes de salir. `aplay` y FFmpeg están en
+sesiones separadas para que Ctrl+C no interrumpa directamente la salida ALSA.
+Evita `kill -9` para detener el servidor, porque impide ejecutar esa limpieza.
+El botón **Reiniciar servidor** de la parte superior hace este cierre y vuelve
+a iniciar el proceso con los mismos argumentos; la página se recarga cuando
+detecta la nueva instancia.
 
 Abre `http://<ip-de-la-raspberry>:8080/` desde un dispositivo de la misma red.
 La web tiene dos pestañas. **Efectos de sonido** permite subir archivos de hasta
@@ -105,7 +106,9 @@ inexistentes y `409` cuando ya suenan cuatro archivos.
 
 `GET /api/ost` devuelve la playlist, la pista actual, el estado, los dos
 altavoces elegidos, el modo aleatorio, `position_seconds` y
-`duration_seconds`. El tiempo reproducido se detiene al pausar y vuelve a cero
+`duration_seconds` y `volume` (porcentaje de 0 a 100). El volumen de la OST
+empieza al 60 %; el control de la web lo cambia durante la reproducción sin
+reiniciar la pista ni alterar los efectos. El tiempo reproducido se detiene al pausar y vuelve a cero
 al pasar a la siguiente pista. La duración se obtiene con `ffprobe`, incluido
 en el paquete `ffmpeg`. La playlist OST acepta sólo MP3 y se sube a una
 carpeta independiente:
@@ -137,6 +140,14 @@ curl -X POST http://<ip-de-la-raspberry>:8080/api/ost/channels \
 ```
 
 El cambio de altavoces durante una canción la reinicia desde el principio.
+Para ajustar el volumen de la OST mediante la API:
+
+```bash
+curl -X POST http://<ip-de-la-raspberry>:8080/api/ost/volume \
+  -H 'Content-Type: application/json' \
+  -d '{"volume":60}'
+```
+
 Los efectos y la OST pueden sonar a la vez. `DELETE /api/playbacks` detiene
 sólo los efectos; `POST /api/ost/stop` detiene sólo la música.
 
@@ -193,3 +204,8 @@ Para repetir la comprobación física del dispositivo configurado:
 ```bash
 speaker-test -D plughw:CARD=b2,DEV=0 -c 6 -r 48000 -t wav -l 1
 ```
+
+Si después de detener el servidor con Ctrl+C `speaker-test` recorre los
+canales sin error pero no se oye, anota si apagar y encender **solo el receptor
+HDMI** recupera el sonido. Esa prueba distingue un bloqueo del receptor o de
+la negociación HDMI de un problema que permanezca en la Raspberry.

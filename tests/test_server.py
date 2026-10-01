@@ -6,6 +6,7 @@ import signal
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from io import BytesIO
 
@@ -22,7 +23,7 @@ class FakeMixer(object):
         self.next_id = 0
 
     def play(self, file_id, path, channels, kind='effect', on_complete=None,
-             paused=False):
+             paused=False, volume=1.0):
         if len(channels) not in (1, 2):
             raise ValueError('Select one or two channels')
         if len(set(channels)) != len(channels):
@@ -33,10 +34,18 @@ class FakeMixer(object):
         self.next_id += 1
         result = {'id': 'playback-%s' % self.next_id, 'file_id': file_id,
                   'channels': list(channels),
-                  'state': 'paused' if paused else 'playing', 'kind': kind}
+                  'state': 'paused' if paused else 'playing', 'kind': kind,
+                  'volume': volume}
         self.playbacks[result['id']] = result
         self.callbacks[result['id']] = on_complete
         return result
+
+    def set_volume(self, playback_id, volume):
+        playback = self.playbacks.get(playback_id)
+        if playback is None:
+            return False
+        playback['volume'] = volume
+        return True
 
     def list_playbacks(self, kind=None):
         return [item for item in self.playbacks.values()
@@ -108,7 +117,7 @@ class ServerTests(unittest.TestCase):
 
         class FakeServer(object):
             def __init__(self, *args, **kwargs):
-                pass
+                self.restart_requested = threading.Event()
 
             def serve_forever(self):
                 signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
@@ -128,6 +137,44 @@ class ServerTests(unittest.TestCase):
             audio_server.ThreadedHTTPServer = old_server
         self.assertEqual(closed, ['server', 'mixer'])
 
+    def test_restart_closes_audio_and_socket_before_replacing_process(self):
+        events = []
+
+        class FakeMixer(object):
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def close(self):
+                events.append('mixer')
+
+        class FakeServer(object):
+            def __init__(self, *args, **kwargs):
+                self.restart_requested = threading.Event()
+
+            def serve_forever(self):
+                self.restart_requested.set()
+
+            def server_close(self):
+                events.append('server')
+
+        old_mixer = audio_server.Mixer
+        old_server = audio_server.ThreadedHTTPServer
+        old_execv = audio_server.os.execv
+        arguments = ['--port', '18080', '--data-dir', os.path.join(self.temp, 'restart-effects'),
+                     '--ost-dir', os.path.join(self.temp, 'restart-ost')]
+        try:
+            audio_server.Mixer = FakeMixer
+            audio_server.ThreadedHTTPServer = FakeServer
+            audio_server.os.execv = lambda binary, command: events.append(('execv', binary, command))
+            audio_server.main(arguments)
+        finally:
+            audio_server.Mixer = old_mixer
+            audio_server.ThreadedHTTPServer = old_server
+            audio_server.os.execv = old_execv
+        self.assertEqual(events[:2], ['server', 'mixer'])
+        self.assertEqual(events[2], ('execv', sys.executable,
+                         [sys.executable, os.path.abspath(audio_server.__file__)] + arguments))
+
     def request(self, path, method='GET', body=None, origin=None):
         handler = Handler.__new__(Handler)
         handler.path = path
@@ -144,6 +191,8 @@ class ServerTests(unittest.TestCase):
         handler.server.mixer = self.mixer
         handler.server.ost = self.ost
         handler.server.allowed_origins = frozenset(('http://mansiones.local',))
+        handler.server.instance_id = 'instance-1'
+        handler.server.request_restart = lambda: setattr(self, 'restart_called', True)
         status = []
         self.last_headers = {}
         handler.send_response = lambda code: status.append(code)
@@ -174,6 +223,17 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request('/api/play', 'OPTIONS', origin=origin)[0], 403)
         self.assertNotIn('Access-Control-Allow-Origin', self.last_headers)
         self.assertEqual(self.request('/upload?filename=no.ogg', 'POST', b'ogg', origin)[0], 403)
+
+    def test_restart_endpoint_returns_instance_and_requests_restart(self):
+        self.restart_called = False
+        self.assertEqual(self.request('/api/health')[1]['instance_id'], 'instance-1')
+        code, response = self.request('/api/restart', 'POST')
+        self.assertEqual(code, 202)
+        self.assertEqual(response, {'restarting': True, 'instance_id': 'instance-1'})
+        self.assertTrue(self.restart_called)
+        self.restart_called = False
+        self.assertEqual(self.request('/api/restart', 'POST', origin='http://untrusted.example')[0], 403)
+        self.assertFalse(self.restart_called)
 
     def test_upload_then_play_stereo_and_stop(self):
         code, uploaded = self.request('/upload?filename=effect.ogg', 'POST', b'ogg')
@@ -253,6 +313,30 @@ class ServerTests(unittest.TestCase):
     def test_ost_rejects_duplicate_speakers(self):
         body = b'{"channels":["center","center"]}'
         self.assertEqual(self.request('/api/ost/channels', 'POST', body)[0], 400)
+
+    def test_ost_volume_starts_at_sixty_percent_and_changes_without_restart(self):
+        self.request('/api/ost/upload?filename=music.mp3', 'POST', b'mp3')
+        self.assertEqual(self.request('/api/ost')[1]['volume'], 60)
+        started = self.request('/api/ost/play', 'POST', b'{}')[1]
+        playback_id = started['playback_id']
+        self.assertEqual(self.mixer.playbacks[playback_id]['volume'], 0.6)
+        self.mixer.playbacks[playback_id]['position'] = 2.5
+
+        code, changed = self.request('/api/ost/volume', 'POST', b'{"volume":25}')
+        self.assertEqual(code, 200)
+        self.assertEqual(changed['volume'], 25)
+        self.assertEqual(changed['playback_id'], playback_id)
+        self.assertEqual(changed['position_seconds'], 2.5)
+        self.assertEqual(self.mixer.playbacks[playback_id]['volume'], 0.25)
+
+        self.request('/api/ost/next', 'POST')
+        current_id = self.request('/api/ost')[1]['playback_id']
+        self.assertEqual(self.mixer.playbacks[current_id]['volume'], 0.25)
+
+        for value in (b'{"volume":-1}', b'{"volume":101}',
+                      b'{"volume":true}', b'{"volume":50.5}', b'{}'):
+            self.assertEqual(self.request('/api/ost/volume', 'POST', value)[0], 400)
+        self.assertEqual(self.request('/api/ost')[1]['volume'], 25)
 
     def test_ost_can_restart_after_output_stops(self):
         self.request('/api/ost/upload?filename=music.mp3', 'POST', b'mp3')

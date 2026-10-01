@@ -17,6 +17,7 @@ class OSTController(object):
         self.mixer = mixer
         self.lock = threading.RLock()
         self.channels = ('front_left', 'front_right')
+        self.volume = 60
         self.current_file_id = None
         self.playback_id = None
         self.status = 'stopped'
@@ -60,6 +61,7 @@ class OSTController(object):
                 'state': self.status if active else 'stopped',
                 'shuffle': self.shuffle,
                 'channels': list(self.channels),
+                'volume': self.volume,
                 'playback_id': self.playback_id if active else None,
                 'position_seconds': position if position is not None else 0.0,
                 'duration_seconds': (self.durations.get(self.current_file_id)
@@ -76,7 +78,8 @@ class OSTController(object):
         self.playback_id = None
         self.status = 'stopped'
         playback = self.mixer.play(file_id, path, self.channels, kind='ost',
-                                   on_complete=self._on_complete, paused=paused)
+                                   on_complete=self._on_complete, paused=paused,
+                                   volume=self.volume / 100.0)
         self.current_file_id = file_id
         self.playback_id = playback['id']
         self.status = 'paused' if paused else 'playing'
@@ -165,6 +168,15 @@ class OSTController(object):
         with self.lock:
             self.shuffle = enabled
             self.remaining = []
+            return self.describe()
+
+    def set_volume(self, volume):
+        if isinstance(volume, bool) or not isinstance(volume, int) or not 0 <= volume <= 100:
+            raise ValueError('volume must be an integer between 0 and 100')
+        with self.lock:
+            self.volume = volume
+            if self.playback_id is not None:
+                self.mixer.set_volume(self.playback_id, volume / 100.0)
             return self.describe()
 
     def set_channels(self, channels):

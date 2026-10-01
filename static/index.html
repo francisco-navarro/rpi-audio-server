@@ -17,6 +17,7 @@
         <p>Elige un archivo y envíalo al altavoz que quieras.</p>
       </div>
       <div class="output-badge"><span class="output-dot"></span> SALIDA HDMI <strong>48 kHz · 5.1</strong></div>
+      <button id="restart-server" class="restart-server" type="button">↻ Reiniciar servidor</button>
     </header>
 
     <div id="message" class="message" role="status" aria-live="polite"></div>
@@ -137,6 +138,13 @@
             <button id="ost-pause" type="button" aria-label="Pausar" title="Pausar">⏸</button>
             <button id="ost-next" type="button" aria-label="Pista siguiente" title="Pista siguiente">⏭</button>
             <button id="ost-shuffle" type="button" aria-pressed="false" aria-label="Activar modo aleatorio" title="Modo aleatorio">🔀</button>
+          </div>
+          <div class="ost-volume">
+            <div class="ost-volume-heading">
+              <label for="ost-volume">Volumen OST</label>
+              <output id="ost-volume-value" for="ost-volume">60 %</output>
+            </div>
+            <input id="ost-volume" type="range" min="0" max="100" step="1" value="60">
           </div>
           <div class="ost-routing">
             <h3>Salida estéreo</h3>

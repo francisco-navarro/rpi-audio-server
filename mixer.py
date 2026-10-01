@@ -92,9 +92,15 @@ def _read_exact(stream, size):
     return b''.join(chunks)
 
 
+def _spawn_audio_process(command, **kwargs):
+    # Ctrl+C targets the terminal's foreground process group. Keep FFmpeg and
+    # aplay outside it so only the server receives SIGINT and can drain ALSA.
+    return subprocess.Popen(command, start_new_session=True, **kwargs)
+
+
 class Playback(object):
     def __init__(self, file_id, path, channels, kind='effect', on_complete=None,
-                 paused=False):
+                 paused=False, volume=1.0):
         self.id = uuid.uuid4().hex
         self.file_id = file_id
         self.path = path
@@ -113,6 +119,7 @@ class Playback(object):
         self.error = None
         self.lfe_level = 0.0
         self.frames_played = 0
+        self.volume = volume
 
     def describe(self):
         return {
@@ -147,6 +154,15 @@ class Playback(object):
         self.lfe_level = level
         return _as_bytes(samples)
 
+    def apply_volume(self, pcm):
+        volume = self.volume
+        if volume == 1.0:
+            return pcm
+        if volume == 0.0:
+            return b'\x00' * len(pcm)
+        return _as_bytes(array.array('h', (int(sample * volume)
+                                          for sample in _samples(pcm))))
+
 
 class Mixer(object):
     def __init__(self, device, max_playbacks=5, ffmpeg='ffmpeg', aplay='aplay',
@@ -180,13 +196,15 @@ class Mixer(object):
         self.thread.start()
 
     def play(self, file_id, path, channels, kind='effect', on_complete=None,
-             paused=False):
+             paused=False, volume=1.0):
         if len(channels) not in (1, 2):
             raise ValueError('Select one or two channels')
         if any(name not in CHANNELS for name in channels):
             raise ValueError('Unknown channel')
         if len(set(channels)) != len(channels):
             raise ValueError('Stereo destinations must be different')
+        if isinstance(volume, bool) or not isinstance(volume, (int, float)) or not 0 <= volume <= 1:
+            raise ValueError('Volume must be between 0 and 1')
         with self.lock:
             if (len(self.playbacks) >= self.max_playbacks or
                     kind == 'effect' and sum(item.kind == 'effect' for item in
@@ -195,7 +213,7 @@ class Mixer(object):
             if self.closed.is_set():
                 raise RuntimeError('Audio engine is closed')
             playback = Playback(file_id, path, channels, kind, on_complete,
-                                paused)
+                                paused, volume)
             self.last_error = None
             self.playbacks[playback.id] = playback
             self.wake.set()
@@ -203,6 +221,16 @@ class Mixer(object):
         worker.daemon = True
         worker.start()
         return playback.describe()
+
+    def set_volume(self, playback_id, volume):
+        if isinstance(volume, bool) or not isinstance(volume, (int, float)) or not 0 <= volume <= 1:
+            raise ValueError('Volume must be between 0 and 1')
+        with self.lock:
+            playback = self.playbacks.get(playback_id)
+            if playback is None:
+                return False
+            playback.volume = volume
+            return True
 
     def list_playbacks(self, kind=None):
         with self.lock:
@@ -310,9 +338,12 @@ class Mixer(object):
             active = list(self.playbacks.values())
         self.stop_all()
         self.wake.set()
-        # Closing the ALSA child unblocks a mixer thread stuck in pipe writes.
-        self._close_sink(force=True)
-        self.thread.join(2)
+        # Give the mixer a chance to finish its last write, then let aplay
+        # drain normally. Only force it closed if the mixer is stuck.
+        self.thread.join(3)
+        self._close_sink(force=self.thread.is_alive())
+        if self.thread.is_alive():
+            self.thread.join(1)
         for playback in active:
             if not playback.done_event.wait(0.2):
                 process = playback.process
@@ -337,8 +368,8 @@ class Mixer(object):
             if playback.stop_event.is_set():
                 return
             null = open(os.devnull, 'wb')
-            process = subprocess.Popen(command, stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE, stdin=null)
+            process = _spawn_audio_process(command, stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE, stdin=null)
             playback.process = process
             if playback.stop_event.is_set() and process.poll() is None:
                 try:
@@ -412,9 +443,9 @@ class Mixer(object):
             with self.lock:
                 self.alsa_log.clear()
             self._log('ALSA', 'Iniciando aplay con dispositivo %s' % self.device)
-            self.sink = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, bufsize=0)
+            self.sink = _spawn_audio_process(command, stdin=subprocess.PIPE,
+                                              stdout=subprocess.PIPE,
+                                              stderr=subprocess.STDOUT, bufsize=0)
             self.sink_reader = threading.Thread(target=self._collect_output,
                                                 args=(self.sink.stdout, 'ALSA'))
             self.sink_reader.daemon = True
@@ -446,8 +477,8 @@ class Mixer(object):
                 sink.stdin.close()
         except (IOError, OSError, ValueError):
             pass
-        # Let aplay drain its ALSA buffer after a natural end. Shutdown uses
-        # force=True so the HDMI device is released without waiting on ALSA.
+        # Let aplay drain its ALSA buffer after a natural end. Force is only
+        # used when the mixer cannot finish its current write.
         if sink.poll() is None and not force:
             deadline = time.time() + 2.0
             while sink.poll() is None and time.time() < deadline:
@@ -511,7 +542,8 @@ class Mixer(object):
                 try:
                     block = playback.blocks.get_nowait()
                     playback.state = 'playing'
-                    inputs.append((playback.filter_lfe(block), playback.destination_indices))
+                    inputs.append((playback.apply_volume(playback.filter_lfe(block)),
+                                   playback.destination_indices))
                     played.append(playback)
                 except queue.Empty:
                     if playback.done_event.is_set():

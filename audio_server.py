@@ -126,6 +126,16 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         self.ost_files = ost_files
         self.ost = ost
         self.allowed_origins = frozenset(allowed_origins)
+        self.instance_id = uuid.uuid4().hex
+        self.restart_requested = threading.Event()
+
+    def request_restart(self):
+        if self.restart_requested.is_set():
+            return
+        self.restart_requested.set()
+        timer = threading.Timer(0.2, self.shutdown)
+        timer.daemon = True
+        timer.start()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -213,7 +223,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/ost':
             return self._json(200, self.server.ost.describe())
         if path == '/api/health':
-            return self._json(200, self.server.mixer.health())
+            health = self.server.mixer.health()
+            health['instance_id'] = self.server.instance_id
+            return self._json(200, health)
         static = {
             '/': ('index.html', 'text/html; charset=utf-8'),
             '/app.js': ('app.js', 'application/javascript; charset=utf-8'),
@@ -229,6 +241,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self._same_origin():
             return self._error(403, 'Origin is not allowed')
         parsed = urlsplit(self.path)
+        if parsed.path == '/api/restart':
+            self._json(202, {'restarting': True, 'instance_id': self.server.instance_id})
+            self.server.request_restart()
+            return
         if parsed.path in ('/upload', '/api/ost/upload'):
             try:
                 length = self._content_length(MAX_UPLOAD_BYTES)
@@ -280,7 +296,8 @@ class Handler(BaseHTTPRequestHandler):
             '/api/ost/previous': 'previous',
         }
         if parsed.path in ost_actions or parsed.path in ('/api/ost/shuffle',
-                                                          '/api/ost/channels'):
+                                                          '/api/ost/channels',
+                                                          '/api/ost/volume'):
             try:
                 if parsed.path == '/api/ost/play':
                     payload = self._read_json()
@@ -292,6 +309,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = self.server.ost.set_shuffle(self._read_json().get('shuffle'))
                 elif parsed.path == '/api/ost/channels':
                     result = self.server.ost.set_channels(self._read_json().get('channels'))
+                elif parsed.path == '/api/ost/volume':
+                    result = self.server.ost.set_volume(self._read_json().get('volume'))
                 else:
                     result = getattr(self.server.ost, ost_actions[parsed.path])()
                 return self._json(200, result)
@@ -361,6 +380,9 @@ def main(argv=None):
             server.server_close()
         finally:
             mixer.close()
+    if server.restart_requested.is_set():
+        arguments = list(argv) if argv is not None else sys.argv[1:]
+        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + arguments)
 
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ const selectedFileElement = document.getElementById('selected-file');
 const fileCountElement = document.getElementById('file-count');
 const activeCountElement = document.getElementById('active-count');
 const stopAllButton = document.getElementById('stop-all');
+const restartButton = document.getElementById('restart-server');
 const audioStatusElement = document.getElementById('audio-status');
 const alsaLogElement = document.getElementById('alsa-log');
 const ffmpegLogElement = document.getElementById('ffmpeg-log');
@@ -22,8 +23,10 @@ let lastAudioError = null;
 let ost = null;
 let ostUpdatedAt = 0;
 let ostEndTimer = null;
+let ostVolumeEditing = false;
 let healthInFlight = false;
 let healthTimer = null;
+let restarting = false;
 
 const ostPlaylistElement = document.getElementById('ost-playlist');
 const ostPanelElement = document.getElementById('ost-panel');
@@ -32,6 +35,8 @@ const ostElapsedElement = document.getElementById('ost-elapsed');
 const ostDurationElement = document.getElementById('ost-duration');
 const ostLeftElement = document.getElementById('ost-left');
 const ostRightElement = document.getElementById('ost-right');
+const ostVolumeElement = document.getElementById('ost-volume');
+const ostVolumeValueElement = document.getElementById('ost-volume-value');
 
 for (const [channel, label] of Object.entries(names)) {
   for (const select of [ostLeftElement, ostRightElement]) {
@@ -67,6 +72,32 @@ async function request(url, options = {}) {
   if (!response.ok) throw new Error(data.error || `Error HTTP ${response.status}`);
   return data;
 }
+
+restartButton.addEventListener('click', async () => {
+  restarting = true;
+  restartButton.disabled = true;
+  message('Reiniciando el servidor de audio…');
+  try {
+    const previous = await request('/api/restart', {method: 'POST'});
+    const deadline = Date.now() + 30000;
+    await new Promise(resolve => setTimeout(resolve, 500));
+    while (Date.now() < deadline) {
+      try {
+        const health = await request('/api/health', {cache: 'no-store'});
+        if (health.instance_id && health.instance_id !== previous.instance_id) {
+          window.location.reload();
+          return;
+        }
+      } catch (_) { /* El servidor está cerrando o arrancando. */ }
+      await new Promise(resolve => setTimeout(resolve, 600));
+    }
+    throw new Error('El servidor no volvió a estar disponible. Comprueba su terminal.');
+  } catch (error) {
+    restarting = false;
+    restartButton.disabled = false;
+    message(error.message, true);
+  }
+});
 
 function renderFiles() {
   filesElement.replaceChildren();
@@ -220,6 +251,10 @@ function renderOST() {
   }[ost.state] || ost.state;
   ostLeftElement.value = ost.channels[0];
   ostRightElement.value = ost.channels[1];
+  if (!ostVolumeEditing) {
+    ostVolumeElement.value = String(ost.volume);
+    ostVolumeValueElement.textContent = `${ost.volume} %`;
+  }
   const shuffleButton = document.getElementById('ost-shuffle');
   shuffleButton.classList.toggle('is-active', ost.shuffle);
   shuffleButton.setAttribute('aria-pressed', String(ost.shuffle));
@@ -353,6 +388,16 @@ for (const [id, path] of Object.entries({
 document.getElementById('ost-shuffle').addEventListener('click', () => {
   if (ost) postOST('/api/ost/shuffle', {shuffle: !ost.shuffle});
 });
+ostVolumeElement.addEventListener('input', () => {
+  ostVolumeEditing = true;
+  ostVolumeValueElement.textContent = `${ostVolumeElement.value} %`;
+});
+ostVolumeElement.addEventListener('change', async () => {
+  const volume = Number(ostVolumeElement.value);
+  await postOST('/api/ost/volume', {volume});
+  ostVolumeEditing = false;
+  renderOST();
+});
 for (const select of [ostLeftElement, ostRightElement]) {
   select.addEventListener('change', () => {
     const channels = [ostLeftElement.value, ostRightElement.value];
@@ -366,6 +411,7 @@ for (const select of [ostLeftElement, ostRightElement]) {
 }
 
 async function refreshHealth() {
+  if (restarting) return;
   if (healthInFlight) return;
   healthInFlight = true;
   try {
@@ -397,6 +443,7 @@ function scheduleHealth() {
 }
 
 function refreshActiveTab() {
+  if (restarting) return;
   const update = effectsPanelElement.hidden ? refreshOST() : refreshPlaybacks();
   update.catch(error => message(error.message, true));
 }
